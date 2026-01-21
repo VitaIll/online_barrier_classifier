@@ -1,0 +1,18 @@
+# Data download configuration
+symbol: "BTCUSDT"
+market_type: "spot"
+
+# Date range (inclusive)
+start_date: "2023-01-01"
+end_date: "2025-12-31"
+
+# Paths (relative to project root)
+paths:
+  raw_data: "data/raw_data"
+  cleansed_data: "data/cleansed_data"
+
+# Binance Vision URL template
+url_template: "https://data.binance.vision/data/spot/monthly/klines/{symbol}/1m/{symbol}-1m-{year}-{month:02d}.zip"
+
+# Gap handling
+max_gap_minutes: 60  # Gaps >= this are flagged as "major gaps" (all gaps still start a new segment)
