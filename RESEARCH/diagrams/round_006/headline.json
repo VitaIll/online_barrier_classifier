@@ -1,0 +1,48 @@
+{
+  "round_id": "006",
+  "hypothesis": "H-107",
+  "claim": "plot helpers in src/plotting.py produce parity diagnostics and pass smoke tests on real data",
+  "n_test": 31486,
+  "base_rate": 0.09705901035380804,
+  "offline_global": {
+    "roc_auc": 0.8130263455939362,
+    "pr_auc": 0.35616826027995246,
+    "log_loss": 0.30838393562051675,
+    "brier_score": 0.09026056112179343,
+    "ece": 0.10797497725999225
+  },
+  "online_global": {
+    "roc_auc": 0.7987621152716418,
+    "pr_auc": 0.3310235811808525,
+    "log_loss": 0.26466363589795855,
+    "brier_score": 0.07579895339943579,
+    "ece": 0.014676604005672495
+  },
+  "top_5_features": [
+    {
+      "name": "minute_sin",
+      "importance": 4.017179267848657
+    },
+    {
+      "name": "return_rolling_mean_8",
+      "importance": 3.188090870204649
+    },
+    {
+      "name": "return_rolling_mean_12",
+      "importance": 2.686167757821416
+    },
+    {
+      "name": "minute_cos",
+      "importance": 2.107819612076756
+    },
+    {
+      "name": "parkinson_var_rolling_mean_2",
+      "importance": 1.2783101078056505
+    }
+  ],
+  "outputs": [
+    "RESEARCH\\diagrams\\round_006\\visual_report_card.png",
+    "RESEARCH\\diagrams\\round_006\\calibration_by_regime_offline.png",
+    "RESEARCH\\diagrams\\round_006\\calibration_by_regime_online.png"
+  ]
+}

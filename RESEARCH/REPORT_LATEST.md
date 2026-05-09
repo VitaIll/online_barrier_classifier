@@ -4,13 +4,13 @@ Regenerated at end of each round.
 
 ---
 
-**As of**: 2026-05-09 — Round 005 (H-106 regime-stratified calibration helpers)
+**As of**: 2026-05-09 — Round 006 (H-107 plot helpers)
 
 ## Status
 
 - **Branches**: `master` only (in-session loop pattern, no per-round branches).
-- **Tags**: `round-001-accepted` through `round-005-accepted`.
-- **Tests**: 77 pass.
+- **Tags**: `round-001-accepted` through `round-006-accepted`.
+- **Tests**: 90 pass.
 - **MLflow runs**: `barrier_round_001` (only round so far that did real-data work; rounds 002/003 are deterministic measurement / engineering and don't log to MLflow).
 - **Diagrams**:
   - `RESEARCH/diagrams/round_001/` — `tau_sweep_summary.png`, `backtest_detail_tau20_final.png`, `tau_sweep_metrics.csv`, `headline.json`
@@ -27,6 +27,21 @@ Regenerated at end of each round.
 - 003 | H-108 | accept | CatBoostEnsemble ported (sibling + new `load_ensemble`); 10/10 ensemble tests pass; max single-model deviation from ensemble = 0.070
 - 004 | H-101 | accept | label+split utilities in `src/utils.py`; round-trip on persisted parquet (n=78,714) bit-identical to notebook cell 3; 21/21 tests pass
 - 005 | H-106 | accept | regime-stratified calibration helpers; on real test (n=31,486) offline ECE 0.05/0.10/0.17 (low/med/high) vs online ECE 0.015 flat — direct empirical proof of CONSTITUTION I
+- 006 | H-107 | accept | `src/plotting.py` lands 4 helpers; visual report card on real data reproduces round-005 ECE numbers exactly
+
+## Round 006 highlights — plot helpers
+
+**What landed**: `src/plotting.py` (NEW module — cleaner than sibling's all-in-utils arrangement) with four helpers ported and adapted: `plot_calibration_curve`, `plot_calibration_by_regime`, `plot_feature_importance`, `plot_threshold_curves`. 13 smoke tests pin invariants (axes returned, titles populated, ECE annotation toggleable, length-mismatch and missing-column rejected, custom n_regimes accepted).
+
+**API improvements over sibling**:
+- `plot_feature_importance` takes an `importances` array directly, not a model object → works with `CatBoostEnsemble`, sklearn estimators, anything with `feature_importances_`. Length validation rejects misaligned inputs cleanly.
+- `plot_calibration_by_regime` accepts `n_regimes` and explicit `labels` (matches `src.utils.calibration_by_regime`), not just hard-coded 3 buckets.
+
+**Deferred**: `plot_weight_profiles` / `plot_weight_distributions` — there's no sample-weight data in this project until H-102 lands. Adding them now would mean testing against stubs, which is worse than no test.
+
+**Diagnostic** (`scripts/round_006_visual_report_card.py` → `RESEARCH/diagrams/round_006/`): 2×2 visual report card (offline + online calibration curves, top-25/726 feature importance, threshold sweep on offline) plus per-regime calibration figures via the new helper. Numbers reproduce round 005's exactly: offline ECE=0.108, online ECE=0.015. Top features by offline CatBoost importance: `minute_sin` (4.02), `return_rolling_mean_8` (3.19), `return_rolling_mean_12` (2.69), `minute_cos` (2.11), `parkinson_var_rolling_mean_2` (1.28) — time-of-day cyclic + short momentum + Parkinson vol dominate.
+
+**Verdict**: APPROVE.
 
 ## Round 005 highlights — regime-stratified calibration
 
@@ -64,14 +79,14 @@ Offline calibration breaks worst at high volatility (ECE 0.17, mean_p nearly 2×
 
 **Verdict**: APPROVE. Unblocks H-105 (NSGA-II HPO needs reusable splits).
 
-## Round ordering (post-005)
+## Round ordering (post-006)
 
 1. ~~H-005~~ ACCEPTED 001
 2. ~~H-201~~ ACCEPTED 002
 3. ~~H-108~~ ACCEPTED 003
 4. ~~H-101~~ ACCEPTED 004
 5. ~~H-106~~ ACCEPTED 005
-6. **H-107** — plot helpers + threshold-analysis CSV (visual-first parity)
+6. ~~H-107~~ ACCEPTED 006
 7. **H-202** — Adaptive Conformal Inference on offline output (high-vol regime is the priority target after round 005's finding)
 8. **H-105** — NSGA-II HPO (unblocked by H-101)
 9. **H-102** — sample weighting (carefully wrt SqrtBalanced)

@@ -80,6 +80,7 @@ Top of file = highest priority.
 3. ~~**H-108**~~ — ACCEPTED round-003. `src/ensemble.py` lands; unblocks H-206.
 4. ~~**H-101**~~ — ACCEPTED round-004. Label + split utilities in `src/utils.py`; round-trip validated on persisted parquet; unblocks H-105.
 5. ~~**H-106**~~ — ACCEPTED round-005. Calibration metrics in `src/utils.py`. Per-regime visual proves online's regime-flat ECE thesis empirically.
+6. ~~**H-107**~~ — ACCEPTED round-006. Plot helpers in `src/plotting.py`; weight plots deferred to H-102.
 5. **H-106** — regime-stratified calibration helpers (primary metric per CONSTITUTION IV).
 6. **H-107** — plot helpers + threshold-analysis CSV (visual-first reporting parity with sibling).
 7. **H-202** — Adaptive Conformal Inference on offline output.
@@ -264,7 +265,7 @@ The online stage is a streaming conformal layer providing conditional coverage. 
 - **Owner**: IMPLEMENTER
 - **Asks**: ask 5 + visual-first CONSTITUTION rule
 - **Mechanism**: port `plot_calibration_curve`, `plot_calibration_by_regime`, `plot_feature_importance`, `plot_threshold_curves`, `plot_weight_profiles`, `plot_weight_distributions` from sibling. The `threshold_analysis.csv` output (precision, recall, trade-rate at sweep of thresholds) is missing from this project's eval artifacts.
-- **Status**: queued
+- **Status**: ACCEPTED round-006 — `src/plotting.py` lands four helpers (calibration_curve, calibration_by_regime, feature_importance, threshold_curves). 13 smoke tests pass; round-006 visual report card on real data reproduces round-005 ECE numbers exactly (offline 0.108, online 0.015). `plot_weight_*` explicitly deferred to H-102 round. `feature_importance` API improved over sibling: takes `importances` array directly (works with `CatBoostEnsemble` / sklearn / anything), not a model object.
 - **Cost**: low
 
 ### H-108 [P4] CatBoostEnsemble wrapper class (sibling import)
