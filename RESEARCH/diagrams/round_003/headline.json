@@ -1,0 +1,21 @@
+{
+  "round_id": "003",
+  "hypothesis": "H-108",
+  "claim": "CatBoostEnsemble port works: averaged predict_proba is non-trivially distinct from any single model",
+  "n_models": 3,
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "n_eval": 160,
+  "median_std": 0.016974149181607202,
+  "p95_std": 0.03550072057342158,
+  "max_std": 0.05185992199550708,
+  "max_individual_disagreement_with_ensemble": 0.0702039220450752,
+  "best_iteration_avg": 69,
+  "feature_importance_summary": {
+    "max": 45.467423450355376,
+    "min": 6.673603609882053
+  }
+}

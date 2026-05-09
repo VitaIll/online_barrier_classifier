@@ -77,7 +77,7 @@ Top of file = highest priority.
 **Round ordering (post-bootstrap)**:
 1. ~~**H-005**~~ — ACCEPTED round-001.
 2. ~~**H-201**~~ — ACCEPTED round-002. Coverage baseline established; α=0.20 low-vol gap = -7.9pp is what H-202..H-208 must close.
-3. **H-108** — port CatBoostEnsemble class (cheap, unblocks ensemble work).
+3. ~~**H-108**~~ — ACCEPTED round-003. `src/ensemble.py` lands; unblocks H-206.
 4. **H-101** — label + split utilities (round-trip validation).
 5. **H-106** — regime-stratified calibration helpers (primary metric per CONSTITUTION IV).
 6. **H-107** — plot helpers + threshold-analysis CSV (visual-first reporting parity with sibling).
@@ -270,7 +270,7 @@ The online stage is a streaming conformal layer providing conditional coverage. 
 - **Owner**: IMPLEMENTER
 - **Asks**: ask 5
 - **Mechanism**: port the `CatBoostEnsemble` class (averages predictions / feature importances / best iterations across N seed-varied CatBoost models). Drop-in replacement for the ad-hoc model handling currently in `notebooks/offline_train.ipynb`. Saves cleanly + reloads via base+`.{i}.cbm` pattern.
-- **Status**: queued
+- **Status**: ACCEPTED round-003 — `src/ensemble.py` with `CatBoostEnsemble` (predict_proba/feature_importance/best_iteration averaging + save_model + new `load_ensemble` classmethod). 10 tests in `tests/test_ensemble.py` pass. Diagnostic plot `RESEARCH/diagrams/round_003/ensemble_dispersion.png` shows non-trivial seed disagreement (max single-model deviation from ensemble = 0.070). Unblocks H-206.
 - **Cost**: low (~20 min)
 
 ### H-113 [P3] CSCV — Probability of Backtest Overfit (López de Prado Ch. 11)
