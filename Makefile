@@ -20,6 +20,12 @@ help:
 loop-status:
 	$(PYTHON) scripts/loop_status.py
 
+loop-tail:
+	$(PYTHON) scripts/tail_round.py
+
+loop-tail-tools:
+	$(PYTHON) scripts/tail_round.py --tools-only --tail 60
+
 loop-daemon:
 	powershell -ExecutionPolicy Bypass -File scripts/loop_daemon.ps1
 

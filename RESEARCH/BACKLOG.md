@@ -56,7 +56,7 @@ Top of file = highest priority.
 - **Asks**: ask 4 — **first PnL number**
 - **Mechanism**: load `artifacts/offline_model/model.cbm` and the persisted online predictions in `artifacts/online_eval/predictions.parquet` (already on disk from a previous run). Feed `p_offline` and `p_final` columns into `src/backtest.py::simulate_inventory_aware` with M=20, φ=0.00411 (matched to label α), c_stop ≈ φ initially (symmetric — see strategy-realism CONSTITUTION V.b). Compare offline-only-decisions vs offline+online-decisions vs always-on null under realistic costs. Tag round `backtest` (30-min budget).
 - **Falsification**: harness emits finite metrics on real predictions; null Sharpe is approximately 0 (with symmetric barriers) or negative (with c_stop < φ); offline+online Sharpe matches or exceeds offline-only.
-- **Status**: queued — does NOT depend on H-101..H-103 (the predictions.parquet file already exists from `notebooks/online_eval.ipynb`'s last run; no need to re-run training).
+- **Status**: in_progress (round 001) — does NOT depend on H-101..H-103 (the predictions.parquet file already exists from `notebooks/online_eval.ipynb`'s last run; no need to re-run training).
 - **Cost**: 30 min (backtest-tagged budget)
 
 **Round ordering (post-bootstrap)**:

@@ -29,6 +29,7 @@ param(
     [string]$PromptFile = "",
     [string]$Effort = "xhigh",
     [string]$PermissionMode = "bypassPermissions",
+    [string]$Model = "opus",
     [switch]$DryRun
 )
 
@@ -67,7 +68,7 @@ $Prompt = Get-Content $PromptFile -Raw
 Log "loop_daemon starting"
 Log "  repo=$RepoRoot"
 Log "  prompt=$PromptFile ($($Prompt.Length) chars)"
-Log "  budget=${RoundTimeoutSeconds}s  sleep=${SleepSeconds}s  effort=$Effort  perm=$PermissionMode  dry=$DryRun"
+Log "  budget=${RoundTimeoutSeconds}s  sleep=${SleepSeconds}s  effort=$Effort  model=$Model  perm=$PermissionMode  dry=$DryRun"
 
 $round = 0
 $consecutiveFailures = 0
@@ -107,6 +108,7 @@ while ($true) {
             "--add-dir", $RepoRoot,
             "--permission-mode", $PermissionMode,
             "--effort", $Effort,
+            "--model", $Model,
             "--setting-sources", "user,project,local",
             "--allow-dangerously-skip-permissions",
             "--verbose"
