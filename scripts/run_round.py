@@ -1,27 +1,20 @@
 #!/usr/bin/env python3
-"""Entry point for the autonomous research-engineering loop.
+"""Entry point for one round of the autonomous research-engineering loop.
 
-This is the script the cron-fired scheduled task will invoke. It is not the
-research agent itself — Claude Code is — but it provides:
+The loop runs in a single Claude Code session per RESEARCH/LOOP_DISCIPLINE.md.
+This script provides:
 
-1. A pre-flight check (clean git tree on `main`, no in-progress round, raw data
-   present or FAST_MODE explicit).
-2. The next-round-number computation.
-3. A standard environment prepare step (creates the round branch, runs
-   `pytest` once as a baseline so the agent starts with a green baseline).
+1. Pre-flight: clean working tree, required files present, baseline pytest
+   green. The round agent calls this at Phase 0.
+2. Next round id: max(`round-NNN-accepted` tag) + 1, zero-padded.
 
 The actual research work — picking from BACKLOG, spawning sub-agents,
 writing code, running experiments, deciding accept/iterate/kill — is done by
-Claude Code in the session that this script's invocation triggers via the
-scheduled task.
+Claude Code in the session, not by this script.
 
-Usage from a scheduled task prompt:
-    The agent reads `RESEARCH/CONSTITUTION.md`, runs `python scripts/run_round.py
-    --preflight`, then proceeds with the round.
-
-Manual ad-hoc usage:
+Usage:
     python scripts/run_round.py --preflight
-    python scripts/run_round.py --next-round-id   # prints e.g. "001"
+    python scripts/run_round.py --next-round-id   # e.g. "003"
 """
 
 from __future__ import annotations
@@ -52,14 +45,17 @@ def current_branch() -> str:
 
 
 def next_round_id() -> str:
-    """Highest existing agent/round-NNN-* + 1, zero-padded to 3 digits."""
-    rc, out, _ = _run(["git", "for-each-ref", "--format=%(refname:short)", "refs/heads/"])
+    """Highest existing `round-NNN-accepted` tag + 1, zero-padded to 3 digits.
+
+    The in-session loop tags every accepted round (no per-round branches) —
+    so tags are the source of truth for round numbering.
+    """
+    rc, out, _ = _run(["git", "tag", "--list", "round-*-accepted"])
     if rc != 0:
         return "001"
-    branches = out.splitlines()
     max_n = -1
-    for b in branches:
-        m = re.match(r"agent/round-(\d{3})-", b)
+    for t in out.splitlines():
+        m = re.match(r"round-(\d{3})-accepted", t)
         if m:
             max_n = max(max_n, int(m.group(1)))
     return f"{max_n + 1:03d}"
@@ -73,13 +69,15 @@ def preflight() -> int:
         return 2
 
     branch = current_branch()
-    if not branch.startswith(("main", "master")):
-        print(f"[run_round] WARN: not on main (currently {branch})")
+    if branch != "master":
+        print(f"[run_round] FAIL: not on master (currently {branch}); the in-session loop runs only on master", file=sys.stderr)
+        return 5
 
     # Verify the RESEARCH directory and its mandatory files exist.
     required = [
         "RESEARCH/CONSTITUTION.md",
         "RESEARCH/ROUND_TEMPLATE.md",
+        "RESEARCH/LOOP_DISCIPLINE.md",
         "RESEARCH/AGENTS.md",
         "RESEARCH/BACKLOG.md",
         "RESEARCH/LEDGER.md",
