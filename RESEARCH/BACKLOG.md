@@ -75,8 +75,8 @@ Top of file = highest priority.
 - **Cost**: low (post-H-113)
 
 **Round ordering (post-bootstrap)**:
-1. **H-005** — first PnL number (no port dependency).
-2. **H-201** — coverage baseline on existing ARF (measure-only, no model change).
+1. ~~**H-005**~~ — ACCEPTED round-001.
+2. ~~**H-201**~~ — ACCEPTED round-002. Coverage baseline established; α=0.20 low-vol gap = -7.9pp is what H-202..H-208 must close.
 3. **H-108** — port CatBoostEnsemble class (cheap, unblocks ensemble work).
 4. **H-101** — label + split utilities (round-trip validation).
 5. **H-106** — regime-stratified calibration helpers (primary metric per CONSTITUTION IV).
@@ -88,6 +88,8 @@ Top of file = highest priority.
 11. **H-111 / H-112 / H-114 / H-115** — sibling-borne feature groups.
 12. **H-203 / H-204 / H-205 / H-206 / H-207 / H-208** — online-stage refinements.
 
+(H-201b, H-201c are P4/P3 follow-ups inserted after current ordering; pick when natural.)
+
 ---
 
 ## Tier 1 — Streaming conformal coverage layer (asks 2 + 6, the project's differentiator)
@@ -98,8 +100,24 @@ The online stage is a streaming conformal layer providing conditional coverage. 
 - **Owner**: IMPLEMENTER + THEORIST
 - **Mechanism**: treat the existing River `ARFClassifier` output as if it were a conformal predictor at varying confidence levels (set construction via `predict_proba_one`). Compute marginal empirical coverage AND per-regime coverage on the test split. Quantify *coverage gap* = 1 - α - empirical_coverage by regime. This becomes the baseline every online-stage hypothesis must beat.
 - **Falsification**: report finite numbers; a > 5% absolute coverage gap in any regime is the gap to close.
-- **Status**: queued — first round attacking ask 2.
+- **Status**: ACCEPTED round-002 — chronological 30/70 cal/eval split on predictions.parquet with parkinson_var_rolling_mean_24 terciles. Finite numbers everywhere; constant-predictor sanity passes (α=0.05 cov=1.0000, α=0.20 cov=0.9181=1-eval_base_rate). Naive `p≥α` over-covers by 8-10pp at α=0.10 → ARF probs not directly usable as conformal thresholds. Mondrian LAC compresses α=0.10 gap to ±3.4pp; α=0.20 still has -7.9pp on low-vol/p_online and -5.8pp on low-vol/p_offline → THE gap H-202..H-208 must close. Spawned H-201b (finer-bin regime), H-201c (cal-fraction sensitivity).
 - **Cost**: low (no model changes; just measurement)
+
+### H-201b [P4] (spawned by round 002) Finer regime binning to expose what Mondrian-LAC misses at α=0.20
+- **Owner**: IMPLEMENTER
+- **Asks**: ask 2 (online coverage)
+- **Mechanism**: round 002 used 3-bucket parkinson_var terciles. The persistent low-vol gap at α=0.20 (-7.9pp over-coverage) suggests the low-vol bucket contains a sub-mode that Mondrian-LAC's single q_hat for the whole tercile cannot adapt to. Re-run `scripts/round_002_coverage_baseline.py` with `N_TERCILES=5` (quintiles) and check whether the low-quintile gap at α=0.20 shrinks below ±5pp. If it does, the ARF coverage gap is fundamentally a *resolution* problem (more buckets fix it); if it doesn't, the gap is a probability-quality problem (Mondrian can't fix it; needs ACI / locally-weighted conformal — H-202..H-205).
+- **Falsification**: low-quintile gap at α=0.20 stays > 5pp under quintile binning → resolution alone won't help; H-202 work justified.
+- **Status**: queued
+- **Cost**: low (script tweak + rerun)
+
+### H-201c [P3] (spawned by round 002) Sensitivity of coverage gap to calibration-fraction
+- **Owner**: IMPLEMENTER
+- **Asks**: ask 2 + ask 4 (rigorous evaluation)
+- **Mechanism**: round 002 used a fixed 30/70 chronological cal/eval split. Sweep `CAL_FRAC ∈ {0.20, 0.30, 0.40, 0.50}` and report how max |gap| (Mondrian, α=0.10) and max |gap| (Mondrian, α=0.20) vary. If the gap is monotone-decreasing in cal_frac, the round-002 gap was an n_cal-power problem; if invariant, it's a real conditional-miscalibration signal.
+- **Falsification**: gap collapses to within ±0.5pp at cal_frac=0.50 → the round-002 finding is an n_cal-power artifact, not a real gap.
+- **Status**: queued
+- **Cost**: low (script-level loop + 4× rerun)
 
 ### H-202 [P5] Adaptive Conformal Inference (Gibbs & Candès 2021)
 - **Owner**: LITERATURE-SCOUT + IMPLEMENTER + CRITIC
