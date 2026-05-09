@@ -1,4 +1,6 @@
-"""Tests for `src.inference` — Phase A unified prediction surface.
+"""Tests for `src.inference` — Phase A unified prediction surface
+(round-015 corrected: Mondrian-ACI driven by p_online, the streaming-layer
+output of the two-layer architecture).
 
 The tests pin:
 - `RegimeCuts.assign` returns ids in [0, n_regimes-1] and matches the equal-
@@ -8,7 +10,8 @@ The tests pin:
   for under-sampled regimes.
 - `predict()` returns a DataFrame with all mandated columns; q histories are
   finite; in_set indicators are 0/1; `confidence_score` is non-negative.
-- Reduces to plain ACI (single regime) when the regime has cardinality 1.
+- `predict()` requires `p_online` and uses `p_online` to drive the conformal
+  stream (round-015 contract).
 """
 
 from __future__ import annotations
@@ -194,6 +197,37 @@ def test_predict_q_init_overrides_applied():
                    gamma=0.0, q_init_by_regime_per_alpha=overrides)
     np.testing.assert_array_equal(out["q_lo_10"].to_numpy(), 1.0)
     np.testing.assert_array_equal(out["in_set_10"].to_numpy(), 1)
+
+
+def test_predict_requires_p_online_driven_two_layer_architecture():
+    """Round-015 contract: the conformal stream is driven by `p_online` (the
+    streaming-layer output), not `p_offline`. Calling predict() without
+    `p_online` is an architectural error and must raise."""
+    df = pd.DataFrame({
+        "p_offline": [0.1, 0.5],
+        "y_true":    [0, 1],
+    })
+    cuts = RegimeCuts(feature="x", edges=(0.5,), labels=("a", "b"))
+    with pytest.raises(KeyError, match="p_online"):
+        predict(df, regime_values=np.array([0.1, 0.7]), regime_cuts=cuts)
+
+
+def test_predict_in_set_uses_p_online_not_p_offline():
+    """If we set p_online to 1.0 (very confident) and p_offline to 0.0 (no
+    signal), `in_set_α` should be 1 because the conformal layer reads the
+    online output. Round-015 fixes round-011's offline-driven mistake."""
+    n = 50
+    df = pd.DataFrame({
+        "p_offline": np.zeros(n),
+        "p_online":  np.full(n, 0.99),
+        "y_true":    np.ones(n, dtype=int),
+    })
+    regime_values = np.zeros(n)
+    cuts = RegimeCuts(feature="x", edges=(), labels=("only",))
+    out = predict(df, regime_values=regime_values, regime_cuts=cuts,
+                   alphas=(0.10,))
+    # With p_online = 0.99 ≥ 1 - q across all rows, in_set_10 should be 1.
+    assert (out["in_set_10"].to_numpy() == 1).all()
 
 
 def test_predict_default_alphas_produce_three_q_columns():

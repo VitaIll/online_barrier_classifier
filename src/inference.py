@@ -1,23 +1,30 @@
-"""Phase A unified prediction surface.
+"""Phase A unified prediction surface — two-layer architecture.
+
+The pipeline is hierarchical:
+
+    offline CatBoost  ──>  p_offline
+                              │  (p_offline + selected_features)
+                              ▼
+                    online ARFClassifier  ──>  p_online    ← system output
+                              │
+                              ▼
+                    streaming Mondrian-ACI on p_online  ──> per-regime q_t,
+                                                             in_set_α, etc.
 
 `predict()` consumes an already-loaded `predictions_df` (one row per decision
-boundary, with at minimum `p_offline`, `p_online`, `y_true`) plus the **frozen**
-regime cuts and a Mondrian-ACI configuration, and returns the prediction
-surface defined in MANDATE §A.1 — `p_offline`, `p_online`, per-regime conformal
-thresholds at α ∈ {0.05, 0.10, 0.20}, `in_set_*` indicators, plus optional
-`sigma_epistemic` / `confidence_score`.
+boundary, with `p_offline`, `p_online`, `y_true`) plus the **frozen** regime
+cuts and a Mondrian-ACI configuration, and emits the unified prediction
+surface that downstream strategies read from.
 
-This is the **prediction layer** every Phase-A strategy reads from. It is pure
-(no I/O), deterministic given inputs, and testable. Reuses
-`src.conformal.aci_mondrian_stream` for the prequential q-trajectory; reuses
-`src.utils.calibrate_alpha` semantics to validate that the regime cuts were
-fit on the appropriate slice (caller responsibility).
+Per round-008 (Mondrian-ACI on p_online), the conformal stream MUST be driven
+by `p_online` — the calibrated/corrected output the system actually emits.
+Driving it off `p_offline` (as round-011's predict() incorrectly did) treats
+the offline layer as the system output and ignores the architecture.
 
-Round-011 scope: prediction surface populated for p_offline + p_online +
-regime + per-α q + in_set; sigma_epistemic / confidence_score are optional
-(emitted as NaN when virtual-ensemble is unavailable on the persisted
-single-CatBoost model). Phase C revisits sigma_epistemic when the
-3-seed CatBoost ensemble is materialised on disk.
+Round-015 fixes that: `p_stream=p_online` everywhere, and `confidence_score`
+is computed against `p_online` too. The offline-driven conformal columns are
+NOT emitted; downstream strategies must consume `p_online` for any conformal
+gating.
 """
 
 from __future__ import annotations
@@ -41,8 +48,8 @@ class RegimeCuts:
 
     `edges` are the inner cut points (length n_regimes-1) so that
     `regime_id = sum(value > e for e in edges)` produces ids in
-    `0..n_regimes-1`. Persisted by the caller to ensure val/test are
-    binned with the same boundaries fit on train (or train+cal) only.
+    `0..n_regimes-1`. Caller persists this object so val/test are binned
+    with the same boundaries fit on train (or train+cal) only.
     """
 
     feature: str
@@ -50,7 +57,6 @@ class RegimeCuts:
     labels: tuple[str, ...]
 
     def assign(self, values: np.ndarray) -> np.ndarray:
-        """Return the integer regime id (0-indexed) for each value."""
         v = np.asarray(values, dtype=float)
         ids = np.zeros(len(v), dtype=int)
         for e in self.edges:
@@ -58,7 +64,6 @@ class RegimeCuts:
         return ids
 
     def assign_labels(self, values: np.ndarray) -> np.ndarray:
-        """Return the human label ('low'/'med'/'high') for each value."""
         return np.asarray(self.labels, dtype=object)[self.assign(values)]
 
 
@@ -69,11 +74,7 @@ def fit_regime_cuts(
     n_regimes: int = 3,
     labels: Sequence[str] | None = None,
 ) -> RegimeCuts:
-    """Fit equal-frequency cuts on `values` and return a frozen `RegimeCuts`.
-
-    Used once on the train-or-train+cal slice; the resulting object is then
-    serialized and applied to val/test without refitting.
-    """
+    """Fit equal-frequency cuts on `values`."""
     if labels is None:
         if n_regimes == 3:
             labels = ("low", "med", "high")
@@ -100,9 +101,12 @@ def warm_q_init_by_regime(
 ) -> dict[Any, float]:
     """Warm-start the per-regime q for Mondrian-ACI.
 
-    Per-regime LAC quantile of the calibration scores: the same starting
-    point used by the round-008 Mondrian-ACI run. Regimes with fewer than
-    `min_per_regime` calibration samples fall back to `fallback`.
+    `p_cal` should be `p_online` (the streaming-layer output) — the
+    Mondrian-ACI conformal layer always sits on top of `p_online` per
+    the two-layer architecture.
+
+    Per-regime LAC quantile of the calibration scores. Regimes with fewer
+    than `min_per_regime` calibration samples fall back to `fallback`.
     """
     from src.conformal import lac_score, finite_sample_quantile
 
@@ -134,25 +138,25 @@ def predict(
     q_init_by_regime_per_alpha: Mapping[float, Mapping[Any, float]] | None = None,
     sigma_epistemic: Optional[np.ndarray] = None,
 ) -> pd.DataFrame:
-    """Build the unified Phase-A prediction surface.
+    """Build the unified Phase-A prediction surface — Mondrian-ACI on p_online.
 
     Parameters
     ----------
     predictions_df : DataFrame
-        Must contain at least `p_offline`, `p_online`, `y_true`. Extra
-        columns are preserved.
+        Must contain `p_offline`, `p_online`, `y_true`. The offline column is
+        retained for the sanity-floor strategy; the conformal layer is built
+        from `p_online` only.
     regime_values : (n,) array
         Values of `regime_cuts.feature` aligned row-wise with `predictions_df`.
     regime_cuts : RegimeCuts
-        Frozen cut points (fit on train or train+cal only — caller's
-        responsibility).
+        Frozen cut points fit on train (or train+cal) only.
     alphas : sequence of float
         Conformal miscoverage levels. Defaults to (0.05, 0.10, 0.20).
     gamma : float
         Mondrian-ACI learning rate (round-008 default = 0.01).
-    q_init_by_regime_per_alpha : optional mapping `α -> {regime_id: q}`.
-        Per-α warm-start q. If absent for a given α, that α's q starts at 0.5
-        for every regime (plain ACI default).
+    q_init_by_regime_per_alpha : optional mapping `α -> {regime_id: q}`
+        Warm-start q from a per-regime LAC quantile on a held-out cal set
+        of `p_online`. If absent for a given α, q starts at 0.5.
     sigma_epistemic : optional (n,) array
         CatBoost virtual-ensemble σ for each row; if None, NaN is emitted.
 
@@ -160,12 +164,12 @@ def predict(
     -------
     DataFrame with the original columns plus:
         - `regime_id` (int) and `regime_label` (str)
-        - `q_lo_05`, `q_lo_10`, `q_lo_20` (or whichever αs are passed)
-        - `in_set_05`, `in_set_10`, `in_set_20` (whether {1} ∈ set at α)
+        - `q_lo_*` columns at each α (one per request)
+        - `in_set_*` indicators (1 if {1} is in the conformal set at α
+          using `p_online` as the score)
         - `sigma_epistemic` (NaN if not supplied)
-        - `confidence_score` = `max(0, p_offline - q_lo_10)` (default α=0.10
-          for the gating rule; reflects how much the offline prediction
-          clears the conformal threshold for class 1).
+        - `confidence_score` = max(0, p_online − (1 − q_lo_10)) — the
+          per-regime confidence margin AGAINST p_online at α=0.10.
     """
     out = predictions_df.copy()
     n = len(out)
@@ -179,30 +183,27 @@ def predict(
     out["regime_id"] = regime_ids
     out["regime_label"] = regime_labels
 
-    p_offline = out["p_offline"].to_numpy(dtype=float)
+    if "p_online" not in out.columns:
+        raise KeyError(
+            "predict() requires `p_online` in predictions_df — the conformal "
+            "layer is driven by the online layer's output (two-layer "
+            "architecture; round-015 contract)."
+        )
     p_online = out["p_online"].to_numpy(dtype=float)
     y_true = out["y_true"].to_numpy(dtype=int)
 
     overrides = dict(q_init_by_regime_per_alpha or {})
 
     for alpha in alphas:
-        # The conformal threshold is computed on `p_offline` (the offline
-        # prediction is the conformal score's basis; the LAC score is built
-        # from p_offline. The mandate's `q_lo_*` is the q_t the conformal
-        # layer uses against `p_offline` to decide whether {1} is in the
-        # singleton set. We could equally construct q on p_online; for
-        # Phase-A we follow the round-008 convention which used p_offline
-        # for the offline branch and p_online for the online branch — but
-        # the §A.1 contract calls out the "active regime's q at each row",
-        # which is defined by the score at that row. We therefore store
-        # one q per α per row driven by p_offline; strategies that gate on
-        # p_online use the same q via the singleton {1} check below.
+        # The conformal stream is driven by p_online — the two-layer
+        # architecture's output. `in_set_α = 1` iff p_online ≥ 1 - q_t at
+        # the active regime's threshold.
         q_init_for_alpha: dict[Any, float] = {}
         for r in np.unique(regime_ids):
             q_init_for_alpha[int(r)] = float(overrides.get(alpha, {}).get(r, 0.5))
 
         stream = aci_mondrian_stream(
-            p_stream=p_offline,
+            p_stream=p_online,
             y_stream=y_true,
             regime_stream=regime_ids,
             alpha=float(alpha),
@@ -210,8 +211,7 @@ def predict(
             q_init_by_regime=q_init_for_alpha,
         )
         q_history = stream["q_history"]
-        # `in_set_* = 1` iff p_offline at row t >= 1 - q_t (singleton {1} OR full).
-        in_set = (p_offline >= 1.0 - q_history).astype(int)
+        in_set = (p_online >= 1.0 - q_history).astype(int)
 
         suffix = f"{int(round(alpha * 100)):02d}"
         out[f"q_lo_{suffix}"] = q_history
@@ -226,11 +226,9 @@ def predict(
     else:
         out["sigma_epistemic"] = np.full(n, np.nan, dtype=float)
 
-    # Default confidence_score: how much the offline probability clears the
-    # α=0.10 conformal threshold (mandate §A.1).
     if "q_lo_10" in out.columns:
         out["confidence_score"] = np.maximum(
-            0.0, p_offline - (1.0 - out["q_lo_10"].to_numpy())
+            0.0, p_online - (1.0 - out["q_lo_10"].to_numpy())
         )
     else:
         out["confidence_score"] = np.full(n, np.nan, dtype=float)

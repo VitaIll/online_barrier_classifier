@@ -33,8 +33,8 @@ INDEX additions: **9 newly catalogued web-only references** + 1 new tag `[STATS-
 ### 2.1 Rolling retrain (H-310-a + H-310-b)
 
 Every PnL number to date — round-001 (Sharpe=+1.50 at τ=0.30, demoted),
-round-009 (Sharpe=−0.089 at val-τ=0.44), Phase A round-012 (DSR=0 across 7
-strategies) — rests on a SINGLE static fit of `artifacts/offline_model/
+round-009 (Sharpe=−0.089 at val-τ=0.44), Phase A round-015 (DSR=0 across 5
+valid strategies) — rests on a SINGLE static fit of `artifacts/offline_model/
 model.cbm` from `train_fraction=0.6` / 2024-Jun and below. Test runs
 2024-Oct → 2025-Dec, with BTCUSDT regime drift and a +120% drift on the
 underlying. **Every reported Sharpe is therefore an upper bound on a
@@ -61,7 +61,7 @@ Priority **P5**, runs as Phase A round 4–5. Total wall ≈ 75 min.
 `src/backtest.py::Trade` already records (k_open, k_close, n_open, n_close,
 exit_reason, pnl_log_net, p_signal, bars_held). No round has decomposed
 this. Round-009 reported aggregate Sharpe and called the strategy
-unviable; round-012 stacked 7 strategies on top of those aggregates.
+unviable; round-015 ran 5 valid two-layer strategies against the same harness.
 
 The postmortem schema (7 slices, each with a numerical falsifier) tests
 whether ANY conditional alpha exists — by exit-reason, hold-time,
@@ -106,25 +106,41 @@ measurement ~90 min.
 ## 3. Anti-slop check (concrete numbers from last 3 accepted rounds)
 
 The mandate requires this in scratch before drafting a single hypothesis.
-Recorded here for the record:
+**Note (round-015 update)**: rounds 011 and 012 were SUPERSEDED-by-015 due
+to architectural errors (sibling-style averaging/stacking of `p_offline` and
+`p_online`; Mondrian-ACI driven by `p_offline` instead of `p_online`). Their
+numbers are no longer canonical. The canonical Phase-A numbers are now
+round-015's, recorded below.
 
 | Round | Hypothesis | Knob | Test Sharpe | n_trades | p_boot | DSR | Notes |
 |---|---|---|---|---|---|---|---|
 | 009 | H-005b (val-τ) | τ\*=0.44 | **−0.089** | 3,427 | 0.000 | 0.000 (26-τ) | Round-001 PSR=0.995 demoted |
-| 011 | Phase-A-r1 baselines 1-3 | τ\*=0.44 / 0.52 / 0.18 | **−0.089 / −11.59 / −0.116** | 3,427 / 289 / 7,207 | 0.000 / 1.000 / 0.000 | 0 / 0 / 0 | reproduces R009 sanity floor |
-| 012 | Phase-A-r2 strategies 4-7 + WF + multi-DSR | various | best −0.089 (offline) | up to 7,207 | 0.00–1.00 | **0 for all 7** | n_trials=137, var_trial=9.40 |
+| 015 | Phase-A corrective (5 valid strategies) | τ=0.44 / 0.52 / 0.52 / k=20 / r=0.123 | **−0.089 / −11.59 / −11.87 / −5.67 / −3.96** | 3,427 / 289 / 288 / 2,372 / 3,448 | 0.000 / 1.000 / 0.735 / 0.505 / 1.000 | **0 for all 5** | n_trials=85, var_trial=8.36; modal IS-best across 12,870 CSCV combinations = `baseline_offline_tau` |
 
-**Canonical "gap to close" (post-Phase-A round 012)**: no strategy among
-the 7 survives the deflated bar. The model has *discrimination* (offline
-p_boot=0.000 vs shuffled-signal null) but no *tradable alpha* at this
-label / cost / barrier-strategy combination. Three axes to attack:
+**Canonical "gap to close" (post-Phase-A round 015, two-layer architecture)**:
+no strategy among the 5 legitimate ones survives the deflated bar. The
+offline layer alone is the modal IS-best of the 5 (cross-strategy CSCV
+PBO=0.000) — adding the online layer or the conformal gate strictly destroys
+value vs offline-alone (`baseline_online_tau` = −11.59, `conformal_gate_tau`
+= −11.87, `mondrian_aci_size` = −5.67, all worse than `baseline_offline_tau`
+at −0.089). The two-layer system as currently fit does NOT produce tradable
+alpha. The model has *discrimination* (offline p_boot=0.000) but no
+*tradable edge*.
+
+This is consistent with CONSTITUTION I — the online layer trades ranking for
+regime-conditional coverage by design. Round-008 already proved coverage
+(Mondrian-ACI per-regime gap ≤ 0.6pp at α∈{0.05, 0.10, 0.20}; α=0.20 low-vol
+p_online gap −7.9pp → +0.04pp). Round-015 honestly reports that this
+calibration discipline does not translate into trading edge under the current
+label / cost / barrier-strategy combination.
+
+Three axes to attack:
 - Strategy: align label↔strategy via no-stop (H-024) or first-touch (H-023).
 - Features: pull in queued sibling-imported groups (H-111/112/114/115) plus the new H-311/312/313.
 - Process: rolling retrain (H-310-a/b) to remove the static-model artefact.
 
-**Coverage already closed**: round-008 Mondrian-ACI per-regime gap ≤
-0.6pp at α∈{0.05, 0.10, 0.20}; α=0.20 low-vol p_online gap −7.9pp →
-+0.04pp.
+**Forbidden under round-015 contract**: any strategy that averages or stacks
+`(p_offline, p_online)`. The architecture is hierarchical, not parallel.
 
 ---
 

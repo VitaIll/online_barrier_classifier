@@ -6,24 +6,57 @@ The loop runs **in a single Claude Code session**, self-scheduled via `ScheduleW
 
 ## 0. Project architecture snapshot
 
-`online_barrier_classifier` is a **two-stage barrier classifier**:
+`online_barrier_classifier` is a **two-layer hierarchical classifier**.
+`p_online` is the **system output**; `p_offline` is an **input** to the online
+layer, not a parallel signal:
 
 ```
 Binance 1m kline → 20m decision bars (DecisionBarAggregator, gap-aware)
    → BaseFeatureExtractor + LagFeatureExtractor + RollingFeatureExtractor + ExpandingFeatureExtractor
    → label y_k = 1[ ln(H_{k+1} / C_k) ≥ α ]   (α = 90%-quantile of train log-excursions)
    → split: chronological, train_fraction=0.6, val_fraction (of train)=0.2
-   → OFFLINE: CatBoost (langevin=True, Ordered, MVS, SqrtBalanced) → p_offline
-   → top_k_features=120 selected by CatBoost importance
-   → ONLINE (streaming conformal coverage layer):
-        River ARFClassifier(n_models=100, max_features=log2,
-                            split_criterion=hellinger, max_depth=15,
-                            leaf_prediction=nba, lambda=6,
-                            ADWIN warning δ=0.005, drift δ=0.0005, clock=64)
-      consumes (selected_features + p_offline) and outputs p_online (calibrated probability,
-      effectively the conformal-coverage estimate).
-   → predict-then-learn-with-delayed-label prequential evaluation (notebooks/online_eval.ipynb).
+
+  ┌─ Layer 1 (OFFLINE) ──────────────────────────────────────────────┐
+  │  CatBoost (langevin=True, Ordered, MVS, SqrtBalanced)            │
+  │  → p_offline                                                     │
+  │  top_k_features=120 selected by CatBoost importance              │
+  └──────────────────────────────────────────────────────────────────┘
+                              │
+                              │  z_k = (selected_features_k, p_offline_k)
+                              ▼
+  ┌─ Layer 2 (ONLINE — streaming conformal coverage layer) ──────────┐
+  │  River ARFClassifier(n_models=100, max_features=log2,            │
+  │                      split_criterion=hellinger, max_depth=15,    │
+  │                      leaf_prediction=nba, lambda=6,              │
+  │                      ADWIN warning δ=0.005, drift δ=0.0005,      │
+  │                      clock=64)                                   │
+  │  consumes z_k and emits p_online — CALIBRATED probability,       │
+  │  effectively the regime-conditional conformal-coverage estimate. │
+  │  This is the SYSTEM OUTPUT.                                      │
+  └──────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+   predict-then-learn-with-delayed-label prequential evaluation
+   (notebooks/online_eval.ipynb is the canonical implementation;
+   `p_final = p_online` in that notebook by definition).
+   The streaming Mondrian-ACI conformal layer in `src/conformal.py`
+   sits on top of `p_online`, NOT `p_offline`.
 ```
+
+**WHAT THIS IS NOT** (round-015 corrective; sibling-style framings are
+falsifications of the architecture and have been deleted from the codebase):
+
+- `p_offline` and `p_online` are **NOT siblings**. Anything that averages
+  them (`0.5·p_off + 0.5·p_on`) or stacks them (logistic regression on
+  `(p_offline, p_online)`) regresses the child onto its parent and is
+  architecturally invalid. Such combiners must NOT appear in the strategy
+  registry; tests pin this.
+- The conformal layer's `q_t` is computed from `p_online`, not `p_offline`
+  (round-008 contract). Driving Mondrian-ACI off `p_offline` ignores the
+  online layer's correction and produces nonsense `in_set_α` indicators.
+- "Use online to correct offline" is satisfied IMPLICITLY by the architecture
+  itself — `p_online` IS the corrected output. There is no second
+  "correction" step that ranks the two layers' outputs against each other.
 
 **Current accepted constants** (mirror `config/*.yaml` and `artifacts/offline_model/config_snapshot.json`):
 
