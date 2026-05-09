@@ -1,0 +1,14 @@
+{
+  "feature": "parkinson_var_rolling_mean_24",
+  "edges": [
+    2.8618140404101846e-06,
+    7.498515892008284e-06
+  ],
+  "labels": [
+    "low",
+    "med",
+    "high"
+  ],
+  "fit_on": "train",
+  "fit_n": 37783
+}
