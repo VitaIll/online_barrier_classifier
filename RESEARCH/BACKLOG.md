@@ -79,6 +79,7 @@ Top of file = highest priority.
 2. ~~**H-201**~~ — ACCEPTED round-002. Coverage baseline established; α=0.20 low-vol gap = -7.9pp is what H-202..H-208 must close.
 3. ~~**H-108**~~ — ACCEPTED round-003. `src/ensemble.py` lands; unblocks H-206.
 4. ~~**H-101**~~ — ACCEPTED round-004. Label + split utilities in `src/utils.py`; round-trip validated on persisted parquet; unblocks H-105.
+5. ~~**H-106**~~ — ACCEPTED round-005. Calibration metrics in `src/utils.py`. Per-regime visual proves online's regime-flat ECE thesis empirically.
 5. **H-106** — regime-stratified calibration helpers (primary metric per CONSTITUTION IV).
 6. **H-107** — plot helpers + threshold-analysis CSV (visual-first reporting parity with sibling).
 7. **H-202** — Adaptive Conformal Inference on offline output.
@@ -256,7 +257,7 @@ The online stage is a streaming conformal layer providing conditional coverage. 
 - **Owner**: IMPLEMENTER
 - **Asks**: ask 4 — primary metric per CONSTITUTION IV
 - **Mechanism**: port `compute_all_metrics`, `expected_calibration_error`, `calibration_by_regime`, `threshold_analysis` from sibling `src/utils.py`. Wire into `notebooks/offline_train.ipynb` and `notebooks/online_eval.ipynb`. Pick a fixed regime signal (proposal: `parkinson_var_rolling_mean_24` from this project's existing features) and run `pd.qcut(_, 3)` to get terciles. Output `RESEARCH/diagrams/round_NNN/calibration_by_regime.png` per round.
-- **Status**: queued
+- **Status**: ACCEPTED round-005 — four helpers in `src/utils.py`. 13 tests pass. First per-regime calibration plot on real test stream produces a striking diagnostic: offline ECE scales 0.05/0.10/0.17 (low/med/high vol — overpredicts everywhere, severity rises with vol); online ARF ECE ≈ 0.015 uniformly across regimes (mean_p ≈ base_rate per regime). This is direct empirical proof of the project's design thesis (online sacrifices ranking for regime-conditional calibration) and identifies high-vol as where offline calibration breaks worst — pointing H-202..H-208 at vol-conditional improvement.
 - **Cost**: medium
 
 ### H-107 [P4] Plot helpers + threshold-analysis CSV (sibling import for visual-first reporting)

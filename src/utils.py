@@ -432,3 +432,177 @@ def chronological_split(
     val = df.iloc[train_end:val_end].copy()
     test = df.iloc[val_end:].copy()
     return train, val, test
+
+
+# =============================================================================
+# CALIBRATION & THRESHOLD METRICS (CONSTITUTION IV primary for offline rounds)
+# =============================================================================
+#
+# Adapted from sibling barrier_classifier/src/utils.py with one important
+# adjustment: ``calibration_by_regime`` accepts user-supplied ``labels`` so
+# this project's regime-tag plumbing can match what's done elsewhere
+# (e.g. round-002 used "low/med/high" parkinson_var terciles). Keeping the
+# default labels matches sibling for drop-in compatibility.
+
+
+def expected_calibration_error(
+    y_true: np.ndarray,
+    y_pred_proba: np.ndarray,
+    n_bins: int = 10,
+) -> float:
+    """Equal-width-bin Expected Calibration Error.
+
+    ``ECE = sum_i (|B_i| / N) * |acc(B_i) - conf(B_i)|``  over ``n_bins`` equal-
+    width probability bins on ``[0, 1]``. Empty bins are skipped (do not
+    contribute zero or NaN). The last bin is closed on the right so ``p=1``
+    falls inside, matching sklearn's calibration_curve and the sibling.
+    """
+    y_true = np.asarray(y_true)
+    y_pred_proba = np.asarray(y_pred_proba)
+    if len(y_true) == 0:
+        return 0.0
+
+    bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+    ece = 0.0
+    n = len(y_true)
+    for i in range(n_bins):
+        lo = bin_edges[i]
+        hi = bin_edges[i + 1]
+        if i == n_bins - 1:
+            mask = (y_pred_proba >= lo) & (y_pred_proba <= hi)
+        else:
+            mask = (y_pred_proba >= lo) & (y_pred_proba < hi)
+        if mask.sum() == 0:
+            continue
+        bin_accuracy = float(y_true[mask].mean())
+        bin_confidence = float(y_pred_proba[mask].mean())
+        bin_weight = float(mask.sum() / n)
+        ece += bin_weight * abs(bin_accuracy - bin_confidence)
+    return float(ece)
+
+
+def compute_all_metrics(
+    y_true: np.ndarray,
+    y_pred_proba: np.ndarray,
+) -> dict[str, float]:
+    """Standard metric dict: roc_auc, pr_auc, log_loss, brier_score, ece.
+
+    Used by ``training_helpers.metric_block_from_predictions`` and the round
+    notebooks. Returns floats so the dict is JSON-serializable.
+    """
+    from sklearn.metrics import (
+        average_precision_score,
+        brier_score_loss,
+        log_loss,
+        roc_auc_score,
+    )
+
+    y_true = np.asarray(y_true)
+    y_pred_proba = np.asarray(y_pred_proba)
+
+    return {
+        "roc_auc": float(roc_auc_score(y_true, y_pred_proba)),
+        "pr_auc": float(average_precision_score(y_true, y_pred_proba)),
+        "log_loss": float(log_loss(y_true, y_pred_proba)),
+        "brier_score": float(brier_score_loss(y_true, y_pred_proba)),
+        "ece": float(expected_calibration_error(y_true, y_pred_proba, n_bins=10)),
+    }
+
+
+DEFAULT_REGIME_LABELS: tuple[str, str, str] = ("low", "med", "high")
+
+
+def calibration_by_regime(
+    y_true: np.ndarray,
+    y_pred_proba: np.ndarray,
+    regime_signal: np.ndarray,
+    *,
+    n_bins: int = 10,
+    n_regimes: int = 3,
+    labels: tuple[str, ...] | None = None,
+    min_samples_per_regime: int = 50,
+) -> dict[str, dict[str, float]]:
+    """ECE + Brier + base-rate per ``regime_signal`` quantile bucket.
+
+    ``regime_signal`` is bucketed via ``pd.qcut`` into ``n_regimes`` quantiles.
+    Default labels are ``("low", "med", "high")`` for ``n_regimes=3`` (matches
+    round-002 wording); users with a different number of regimes must supply
+    explicit ``labels``.
+
+    Buckets with fewer than ``min_samples_per_regime`` rows are dropped from
+    the output to avoid noise-dominated stats.
+    """
+    from sklearn.metrics import brier_score_loss
+
+    y_true = np.asarray(y_true)
+    y_pred_proba = np.asarray(y_pred_proba)
+    regime_signal = np.asarray(regime_signal)
+
+    if labels is None:
+        if n_regimes == 3:
+            labels = DEFAULT_REGIME_LABELS
+        else:
+            labels = tuple(f"q{i}" for i in range(n_regimes))
+    if len(labels) != n_regimes:
+        raise ValueError(
+            f"labels length {len(labels)} != n_regimes {n_regimes}"
+        )
+
+    buckets = pd.qcut(regime_signal, n_regimes, labels=list(labels))
+    results: dict[str, dict[str, float]] = {}
+    for regime in labels:
+        mask = np.asarray(buckets == regime)
+        if mask.sum() < min_samples_per_regime:
+            continue
+        results[str(regime)] = {
+            "n_samples": int(mask.sum()),
+            "base_rate": float(y_true[mask].mean()),
+            "ece": float(
+                expected_calibration_error(
+                    y_true[mask], y_pred_proba[mask], n_bins=n_bins
+                )
+            ),
+            "brier": float(brier_score_loss(y_true[mask], y_pred_proba[mask])),
+            "mean_predicted": float(y_pred_proba[mask].mean()),
+        }
+    return results
+
+
+def threshold_analysis(
+    y_true: np.ndarray,
+    y_pred_proba: np.ndarray,
+    thresholds: np.ndarray | None = None,
+) -> pd.DataFrame:
+    """Sweep ``thresholds`` and report n_trades, trade_rate, precision, recall.
+
+    Default: 101 thresholds linearly spaced on [0, 1]. Useful as the
+    threshold-analysis CSV companion to backtest rounds (CONSTITUTION V.b
+    requires ``tau_open`` to be picked from this kind of sweep, not post-hoc
+    on test).
+    """
+    if thresholds is None:
+        thresholds = np.linspace(0.0, 1.0, 101)
+
+    y_true = np.asarray(y_true).astype(int)
+    y_pred_proba = np.asarray(y_pred_proba).astype(float)
+
+    rows: list[dict[str, Any]] = []
+    n = len(y_true)
+    n_pos = int((y_true == 1).sum())
+
+    for t in thresholds:
+        pred = y_pred_proba >= float(t)
+        n_trades = int(pred.sum())
+        tp = int(((y_true == 1) & pred).sum())
+        precision = float(tp / n_trades) if n_trades > 0 else float("nan")
+        recall = float(tp / n_pos) if n_pos > 0 else float("nan")
+        rows.append(
+            {
+                "threshold": float(t),
+                "n_trades": n_trades,
+                "trade_rate": float(n_trades / n) if n > 0 else 0.0,
+                "precision": precision,
+                "recall": recall,
+            }
+        )
+    return pd.DataFrame(rows)
