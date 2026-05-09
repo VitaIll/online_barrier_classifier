@@ -92,7 +92,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 ```
 
 Decision routing:
-- `accept`: `gh pr create --draft --base main --head agent/round-NNN-<slug>` with the long-form report.
+- `accept`: `gh pr create --draft --base master --head agent/round-NNN-<slug>` with the long-form report.
 - `iterate`: re-queue with refinements; commit on branch but no PR.
 - `kill`: append `[round NNN] H-NNN: <reason>` to KILL_LIST; compaction will delete the branch after `DEAD_BRANCH_AGE_ROUNDS`.
 
@@ -115,7 +115,7 @@ Archives stale LEDGER rows (keeps last 30 hot), strips old "ACCEPTED roundNNN" a
 - Wall-clock budget exceeded (daemon kills the job).
 - Pytest red after one fix attempt.
 - CRITIC veto with REQUEST_CHANGES exceeding scope.
-- Merge conflict on main.
+- Merge conflict on master.
 - `data/raw_data/klines_1m.parquet` missing → run HOUSEKEEPER round.
 
 ## Phase H — HOUSEKEEPER (when BACKLOG empty or weekly)
