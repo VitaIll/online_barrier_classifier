@@ -21,35 +21,43 @@ Top of file = highest priority.
 
 ## Tier 0 — Bootstrap to operational state (after these, the loop is fully self-driving)
 
-### H-101 [P5] Port labels + chronological-split + walk-forward-cv utilities
+### H-101 [P5] Build label + split utilities matching this project's actual flow
 - **Owner**: IMPLEMENTER
-- **Asks**: ask 5 (engineering)
-- **Mechanism**: bring `construct_labels`, `chronological_split_with_embargo`, `walk_forward_cv`, and the embargo/warmup constants from sibling `barrier_classifier` into this project's `src/utils.py`. Re-enable `tests/_pending/test_causality.py` and `test_splits.py`.
-- **Falsification**: tests pass; embargo enforced for any (n, train_frac, val_frac, embargo_k).
+- **Asks**: ask 5 (engineering hygiene)
+- **Mechanism**: extract the label construction (`y_k = 1[ ln(H_{k+1}/C_k) ≥ α ]` with α = 90%-train-quantile) and the chronological split (`train_fraction=0.6`, `val_fraction (of train)=0.2`) from `notebooks/feature_build.ipynb` and `notebooks/offline_train.ipynb` into `src/utils.py` as reusable callables. **Important**: this project has NO embargo, NO walk-forward CV in production — don't blindly port the sibling's utilities, only the parts that match this project's contract. Re-enable `tests/_pending/test_causality.py` and `test_splits.py` after adapting the tests to the actual semantics (no embargo expectations).
+- **Falsification**: round-trip — the new utilities reproduce the existing `dataset.parquet` labels and the existing `train/val/test` splits exactly when called with the current config.
 - **Status**: queued
-- **Cost**: low (~30 min)
+- **Cost**: medium (~45 min, requires careful adaptation)
 
-### H-102 [P5] Port sample-weighting utilities + tests
-- **Owner**: IMPLEMENTER
-- **Asks**: ask 3
-- **Mechanism**: port `compute_barrier_distance_weight`, `compute_time_discount_weight`, `compute_training_weights` from sibling. Re-enable `tests/_pending/test_weights.py`.
+### H-102 [P4] Add sample-weighting utility *adapted* from sibling, with this project's primary metric in mind
+- **Owner**: IMPLEMENTER + THEORIST
+- **Asks**: ask 3 (risk-aware weighting — this project currently has none)
+- **Mechanism**: import `compute_barrier_distance_weight` and `compute_time_discount_weight` from sibling (already known correct), but design the integration carefully: the offline CatBoost currently uses `auto_class_weights="SqrtBalanced"` which is what causes the over-prediction problem the online layer is correcting. Adding sample weights ON TOP of SqrtBalanced may double-count. Test paths: (a) keep SqrtBalanced + add only time-discount; (b) drop SqrtBalanced, use barrier-distance weighting only; (c) drop SqrtBalanced, use both. Compare offline calibration outcomes.
+- **Falsification**: at least one path produces an offline model whose mean predicted p is closer to the base rate (0.097) than the current 0.205.
 - **Status**: queued
-- **Cost**: low
+- **Cost**: medium
 
-### H-103 [P5] Port feature pipeline + imputation + base-series utilities
+### H-103 [P4] Adopt undef-flag pattern (Section I.4)
 - **Owner**: IMPLEMENTER
 - **Asks**: ask 5
-- **Mechanism**: bring `compute_base_series`, `get_imputation_value`, `create_undef_flags_and_impute`. Re-enable `tests/_pending/test_features.py` and `test_properties.py`.
+- **Mechanism**: this project's current feature pipeline silently fills NaNs inside `safe_divide`-style helpers; the sibling's `undef__*` flag-as-input pattern is a strict improvement (preserves the missingness signal). Adapt `feature_pipeline.py` to emit per-undefined-condition flags alongside the value. Re-enable `tests/_pending/test_features.py` once the pattern is in place.
+- **Status**: queued
+- **Cost**: medium
+
+### H-104 [P3] Investigate adding an explicit embargo between val and test (sibling has it; this project doesn't)
+- **Owner**: THEORIST + IMPLEMENTER
+- **Asks**: ask 4 (rigorous evaluation)
+- **Mechanism**: with M=20 and label horizon = 1 decision bar, val→test boundary leakage is bounded (the last val bar's label uses the first test bar's high — that's a single-bar contamination, not a horizon-spanning one). Quantify the actual leakage by comparing test metrics with embargo ∈ {0, 1, 5, 30, 60} bars. If embargo ≥ 1 changes test ROC by < 0.005, document and accept "embargo=0 is fine for this project". Otherwise add to CONSTITUTION I.2.
 - **Status**: queued
 - **Cost**: medium
 
 ### H-005 [P5] Run inventory-aware backtest on the existing offline+online stack
 - **Owner**: IMPLEMENTER + THEORIST
 - **Asks**: ask 4 — **first PnL number**
-- **Mechanism**: load existing `artifacts/offline_model/model.cbm` + replay `notebooks/online_eval.ipynb` to produce streaming `p_offline` and `p_final` predictions on the test split; feed both into `src/backtest.py::simulate_inventory_aware`; compare offline-only vs offline+online policy under realistic costs (CONSTITUTION V.b). Tag round `backtest` (30-min budget).
-- **Falsification**: harness emits finite metrics on real predictions. The accept criterion is "first economic data point landed", not "Sharpe > X".
-- **Status**: queued (after H-101..H-103 to ensure split utilities work)
-- **Cost**: 30 min
+- **Mechanism**: load `artifacts/offline_model/model.cbm` and the persisted online predictions in `artifacts/online_eval/predictions.parquet` (already on disk from a previous run). Feed `p_offline` and `p_final` columns into `src/backtest.py::simulate_inventory_aware` with M=20, φ=0.00411 (matched to label α), c_stop ≈ φ initially (symmetric — see strategy-realism CONSTITUTION V.b). Compare offline-only-decisions vs offline+online-decisions vs always-on null under realistic costs. Tag round `backtest` (30-min budget).
+- **Falsification**: harness emits finite metrics on real predictions; null Sharpe is approximately 0 (with symmetric barriers) or negative (with c_stop < φ); offline+online Sharpe matches or exceeds offline-only.
+- **Status**: queued — does NOT depend on H-101..H-103 (the predictions.parquet file already exists from `notebooks/online_eval.ipynb`'s last run; no need to re-run training).
+- **Cost**: 30 min (backtest-tagged budget)
 
 ---
 

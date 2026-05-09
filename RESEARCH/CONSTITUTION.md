@@ -2,13 +2,67 @@
 
 The autonomous loop must obey these invariants. Any round that violates them is rolled back, regardless of metric improvement. The CRITIC sub-agent has veto power on every PR.
 
+## 0. Project architecture snapshot
+
+`online_barrier_classifier` is a **two-stage barrier classifier**:
+
+```
+Binance 1m kline → 20m decision bars (DecisionBarAggregator, gap-aware)
+   → BaseFeatureExtractor + LagFeatureExtractor + RollingFeatureExtractor + ExpandingFeatureExtractor
+   → label y_k = 1[ ln(H_{k+1} / C_k) ≥ α ]   (α = 90%-quantile of train log-excursions)
+   → split: chronological, train_fraction=0.6, val_fraction (of train)=0.2
+   → OFFLINE: CatBoost (langevin=True, Ordered, MVS, SqrtBalanced) → p_offline
+   → top_k_features=120 selected by CatBoost importance
+   → ONLINE (streaming conformal coverage layer):
+        River ARFClassifier(n_models=100, max_features=log2,
+                            split_criterion=hellinger, max_depth=15,
+                            leaf_prediction=nba, lambda=6,
+                            ADWIN warning δ=0.005, drift δ=0.0005, clock=64)
+      consumes (selected_features + p_offline) and outputs p_online (calibrated probability,
+      effectively the conformal-coverage estimate).
+   → predict-then-learn-with-delayed-label prequential evaluation (notebooks/online_eval.ipynb).
+```
+
+**Current accepted constants** (mirror `config/*.yaml` and `artifacts/offline_model/config_snapshot.json`):
+
+| Constant | Value | Source |
+|---|---|---|
+| `decision_interval` (M, minutes) | 20 | `pipeline.yaml` |
+| `windows` (rolling, in decision bars) | `[1, 2, 4, 8, 12, 24, 48, 96]` | `pipeline.yaml` |
+| `rolling_stats` | `[mean, var, min, max, iqr, ptp]` | `pipeline.yaml` |
+| `lags` | `[1, 2, 3, 5, 10]` | `pipeline.yaml` |
+| `expanding_stats` | `[mean, var, skew]` | `pipeline.yaml` |
+| `barrier.method` | `quantile` | `pipeline.yaml` |
+| `barrier.quantile` | 0.9 | `pipeline.yaml` |
+| `burn_in_bars` | 96 (= max windows) | `pipeline.yaml` |
+| `train_fraction` | 0.6 | `model.yaml` |
+| `val_fraction` (of train) | 0.2 | `model.yaml` |
+| `top_k_features` | 120 | `model.yaml` |
+| Label α (calibrated) | 0.00411 (90%ile of train log-excursions) | `dataset_metadata.json` / `config_snapshot.json` |
+| Symbol / period | BTCUSDT / 2023-01 → 2025-12 | `download.yaml` |
+| Cleansed minute rows | 1,578,160 | `data/cleansed_data/BTCUSDT/metadata.json` |
+| Test sample count | 31,486 | `artifacts/online_eval/metrics.json` |
+| Test positive rate | 0.0971 | `artifacts/online_eval/metrics.json` |
+
+**Legacy results** (pre-loop baseline; this is what every modeling round must improve on):
+
+- Offline test: ROC=0.813, PR=0.356, Brier=0.090
+- Online (final) test: ROC=0.799, PR=0.331, Brier ≈ 0.076 (verified by recomputation in earlier session: -16% vs offline)
+- Calibration: offline systematically over-predicts (mean p ≈ 0.20 vs base rate 0.097), online is essentially diagonal across deciles
+
+**The economic axis is unmeasured to date.** No PnL number exists yet. H-005 produces the first one.
+
 ## I. Causality invariants (HARD; tested)
-1. **No future data in features.** Feature `x_k` may use only bars `n ≤ n_k` where `n_k = k×M`. Past-target features may use only matured labels `y_{<k}`.
-2. **Embargo respected.** `EMBARGO_K=60` decision steps between any two adjacent splits in train/val/test. Walk-forward CV inside HPO uses the same embargo.
-3. **Per-segment warmup.** Drop the first `K_WARMUP=144` boundaries of each segment before any evaluation. `min(k_test) ≥ K_WARMUP` is asserted.
-4. **No NaN dropping for engineered features.** Use the `undef__{feature}` flag-as-input pattern and impute deterministically. Dropping rows because of feature NaNs is forbidden — only label NaNs at series-end may be dropped.
-5. **Label diagnostics are not features.** `m_k`, `tau_k`, `phi`, and weight columns (`w_dist`, `w_time`, `weight`) must never appear in `feature_list.json`.
-6. **Boundary observation rule** ([spec §5.2](docs/MINIMAL_PROJECT_SPEC_v2.md)): bar `n_k` fully observed; `>n_k` strictly forbidden.
+
+These reflect `online_barrier_classifier`'s actual implementation, NOT the sibling `barrier_classifier`'s. Constants in [Section 0](#0-project-architecture-snapshot).
+
+1. **No future data in features.** Feature `x_k` is built from minute bars `n ≤ n_k` where `n_k = k × M`, `M = 20`. Past-target features may use only matured labels `y_{<k}`.
+2. **Chronological split, no explicit embargo.** Train/val/test are pure chronological cuts at `train_fraction × N` and `(train_fraction + val_fraction × train_size) × N` (val is last 20% of training window). This project does NOT have an `EMBARGO_K` separation — adding one is an open hypothesis (see BACKLOG H-104), not an existing invariant. Until then, every round must verify there is no horizon-overlap leakage between val and test (the label horizon is M=20, so a 1-bar train→test gap is enough but documented).
+3. **Per-segment warmup.** `burn_in_bars = 96` (= `max(windows)`). Each segment's first 96 boundaries are dropped before training/evaluation (`bar_in_segment >= burn_in_bars`). Per-segment is enforced because `segment_id` resets at any 1-minute gap (cleansed-data invariant).
+4. **No NaN dropping for engineered features.** This project's current implementation does NOT yet use the `undef__*` flag-as-input pattern; NaNs are filled inside the streaming feature extractors (e.g., `safe_divide` returns a neutral value with a flag). When a round adds a new feature that can be undefined, it must follow the same flag-and-impute discipline. Adding the formal `undef__*` flag pattern as a sibling-imported convention is BACKLOG H-103.
+5. **Label diagnostics never used as features.** The label is `y_k = 1[ ln(H_{k+1} / C_k) ≥ α ]`, with α calibrated on training-only excursions (90th percentile, currently α ≈ 0.00411). The boundary `close`, `high`, and the calibrated α must never be in any feature column the model sees.
+6. **Boundary observation rule** ([spec §5.2](docs/online_barrier_classifier_spec.md)): the decision bar `X_k` is the aggregation of minute bars `[k·M, (k+1)·M)`; features at `k` use only `X_0..X_k`; the label depends only on `H_{k+1}` (next bar's high), which is realized after `k`'s features are fixed.
+7. **Prequential discipline (online stage).** The streaming conformal coverage layer must follow predict-then-learn-with-delayed-label. Specifically: at decision bar `k`, predict `p_online_k` using `(features_k + p_offline_k)` first; only when bar `k+1` arrives, compute `y_k` from `H_{k+1}`, then call `learn_one(z_{k}, y_k)` on the streaming model. The current `notebooks/online_eval.ipynb` implements this via a `label_buffer` deque — that idiom is the contract.
 
 ## II. Process invariants
 1. **Branch-per-round, no automerge.** Each round commits to `agent/round-NNN-<slug>`. Never push to `main`. PRs are opened only after CRITIC approval; the human merges.
@@ -25,9 +79,10 @@ A round resolves to one of three outcomes:
 - **`kill`**: hypothesis falsified or not worth the cost. Appended to KILL_LIST with reason. Branch deleted.
 
 ## IV. Primary success metrics (priority order)
-1. **Out-of-sample probability quality on the test split** — Brier score, log-loss, Expected Calibration Error (ECE).
-2. **Regime-stratified calibration** — ECE/Brier in each volatility tercile (low/med/high).
-3. **Risk-adjusted economic metric** — once `src/backtest.py` lands, deflated Sharpe of an inventory-aware policy with realistic transaction costs.
+1. **For online-stage rounds (the conformal coverage layer)**: empirical coverage (marginal AND per-regime) at α ∈ {0.05, 0.10, 0.20}; prediction-set tightness (avg interval width); coverage gap = 1 - α - empirical_coverage stratified by volatility tercile. **NOT** raw Brier/ROC — the online layer trades ranking for coverage.
+2. **For offline-stage rounds**: out-of-sample probability quality — Brier-Skill-Score (= 1 - Brier_model / Brier_base_rate) + log-loss + Expected Calibration Error (ECE).
+3. **Regime-stratified calibration** — ECE/Brier in each volatility tercile (low/med/high). Apply `pd.qcut(vol_proxy, 3)` on a fixed feature-derived signal (e.g., a long-window `parkinson_var_rolling_mean_*` chosen once and kept fixed across rounds).
+4. **Risk-adjusted economic metric** — once `src/backtest.py` lands a real-data run (H-005), deflated Sharpe of an inventory-aware policy with realistic transaction costs becomes the headline accept gate. Until then, BSS + coverage are the gates.
 4. **Discrimination** (ROC-AUC, PR-AUC) — secondary; cannot be the primary justification for an accept.
 5. **Uncertainty-conditioned trade quality** — predictive interval width vs. PnL conditional on UQ thresholds.
 
