@@ -1,0 +1,65 @@
+{
+  "round_id": "023",
+  "phase": "D",
+  "phase_round": "h130_flow_features",
+  "claim": "H-130 prep + compute on real BTCUSDT data",
+  "n_features": 14,
+  "summary_top5_by_abs_pearson": [
+    {
+      "feature": "flow_taker_buy_ratio_abs_w96",
+      "n_finite": 31486,
+      "mean": 0.043710940112362415,
+      "std": 0.03149474012421035,
+      "q10": 0.007145004400215656,
+      "median": 0.0382668486437233,
+      "q90": 0.08679906930497258,
+      "pearson_with_label": -0.08127869994567573,
+      "spearman_with_label": -0.08289110677501398
+    },
+    {
+      "feature": "flow_taker_buy_ratio_abs_w24",
+      "n_finite": 31486,
+      "mean": 0.05973502921578024,
+      "std": 0.04768634275480518,
+      "q10": 0.008661951614454742,
+      "median": 0.048471541341512506,
+      "q90": 0.12566898439610452,
+      "pearson_with_label": -0.07771572423208364,
+      "spearman_with_label": -0.07754609122705843
+    },
+    {
+      "feature": "flow_taker_buy_ratio_abs_w12",
+      "n_finite": 31486,
+      "mean": 0.07403123786082441,
+      "std": 0.05939152672071675,
+      "q10": 0.011299830545626796,
+      "median": 0.06003190844326087,
+      "q90": 0.1559527756349529,
+      "pearson_with_label": -0.07393745902214507,
+      "spearman_with_label": -0.07163785167106951
+    },
+    {
+      "feature": "flow_taker_buy_ratio_w96",
+      "n_finite": 31486,
+      "mean": -0.03810939788202276,
+      "std": 0.038082000132185254,
+      "q10": -0.08679906930497258,
+      "median": -0.036704782255890495,
+      "q90": 0.00988703552155837,
+      "pearson_with_label": 0.06923399738941886,
+      "spearman_with_label": 0.07352713140730263
+    },
+    {
+      "feature": "flow_taker_buy_ratio_abs_w48",
+      "n_finite": 31486,
+      "mean": 0.04980782204710975,
+      "std": 0.037888862688161586,
+      "q10": 0.00793158859898729,
+      "median": 0.04161445051386169,
+      "q90": 0.10291469013319893,
+      "pearson_with_label": -0.06640017639494207,
+      "spearman_with_label": -0.06989348257772308
+    }
+  ],
+  "wall_clock_s": 3.0781919956207275
+}
