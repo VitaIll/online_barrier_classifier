@@ -583,8 +583,278 @@ The sibling `C:\Users\vitil\OneDrive\Desktop\barrier_classifier\` is the **read-
 
 ---
 
+## Tier 7 — Round-016 mandate cards (override §4, 8-axis re-anchor)
+
+Round-016 (research-planning) added the H-1xx cards below per user override.
+Cards are cross-referenced into the H-3xx series from round-014; relationships
+documented in `RESEARCH/research_plan_round_016.md` §3. The four-phase ordering
+(Phase A rounds 017–019 strategy escalation; Phase B rounds 020–023 bootstrap +
+production refactor; Phase C rounds 024–028 online ensembling + drift retrain;
+Phase D rounds 029–034 features + postmortem) supersedes the round-014 next-8
+ordering.
+
+**Forbidden across all cards in this Tier (and elsewhere)**: averaging or
+convex-blending `p_offline` and `p_online`; training a linear regression on
+`(p_offline, p_online)`; driving Mondrian-ACI off `p_offline`. Round-015
+contract; round-010..013 KILL_LIST history.
+
+### Ask 1 — Invariant features
+
+#### H-130 [P4] Derived flow features at 20m bars (NEW)
+- **Owner**: IMPLEMENTER + LITERATURE-SCOUT
+- **Asks**: ask 1
+- **Mechanism**: Binance kline already exposes `taker_buy_base` and `taker_buy_quote` (in `data_download.ipynb` output). At 20m cadence construct: `taker_buy_ratio_20m = sum(taker_buy_base) / sum(volume)` (the bar-aggregated VPIN imbalance per AFML 18.8.4 form `|2v^B − 1|`); `signed_dollar_flow = sum(taker_buy_quote) − sum(quote_volume − taker_buy_quote)`; `signed_vwap_dev = signed_dollar_flow / sum(quote_volume)`. Derived flow features over rolling windows `{2,4,8,12,24,48,96}` decision bars. Strict CONSTITUTION I.6 — value at boundary k uses minute bars `n ≤ n_k`. The optional later upgrade — top-of-book snapshots from Binance Futures REST — is a separate `data_download` round and explicitly NOT in scope here.
+- **Predicted effect**: ΔBSS ∈ [+0.002, +0.005], concentrated in mid-vol parkinson-tercile (offline ECE 0.10) where directional flow is most informative; high-vol tercile dominated by jump component already; low-vol gain ≈ 0. Seed-noise band ≈ 0.0008 BSS.
+- **Falsification**: paired offline retrain with-vs-without H-130 features; require ΔBSS ≥ 0.0008 (1.5σ_seed) AND CatBoost importance rank top-50 of 726 features. Below threshold → kill.
+- **References**: López de Prado, *AFML* (2018) Ch. 17–19, local PDF `Downloads\Advances in Financial Machine Learning ... Anna's Archive.pdf` pp. 281-292 (tick rule p. 281-282, Kyle's λ p. 287-288, Hasbrouck p. 289, VPIN/OFI p. 291-292; VPIN form §18.8.4 p. 276). `Downloads\Binance BTC_USDT Derivatives Data & Feature Engineering.pdf` pp. 4-6 (explicit `flow__taker_buy_ratio`, `flow__net_vol_btcs`, `flow__net_vol_csum_5m` schema). Bieganowski & Slepaczuk (2026) *Explainable Patterns in Cryptocurrency Microstructure* arXiv 2602.00776 (web; INDEX add `[MICROSTRUCT]`) — OFI / spread / VWAP-to-mid as portable cross-crypto SHAP-leading features.
+- **Status**: queued.
+- **Cost**: medium (~1.5 hours engineering + tests + paired offline retrain ~30 min).
+- **Dependencies**: H-103 undef-flag pattern; new `compute_derived_flow_features` registered after H-103 lands.
+
+#### H-131 [P4] BPV/RV jump-detector + signed-semivariance asymmetry + vov (REFINES H-114, H-312)
+- **Owner**: IMPLEMENTER + THEORIST
+- **Asks**: ask 1
+- **Mechanism**: refine H-114 (vol decomposition at level) and H-312 (BPV ratio across windows) into one card framing: (i) BPV/RV ∈ (0,1] as continuous-vs-jump regime — `BPV = (π/2)·Σ |r_i|·|r_{i-1}|` (Barndorff-Nielsen & Shephard 2004); 1−BPV/RV is jump-share. (ii) `SV_up − SV_down` as direction-aware variance, mechanically aligned with one-sided upper-barrier label (Patton & Sheppard 2015) — strict t ≤ k−1 to prevent leakage (the same bar contributes to both label and SV otherwise). (iii) vol-of-vol (rolling std of rolling vol). The **ratio** BPV/RV is dimensionless and regime-invariant under multiplicative SV — different from H-114's level. The label one-sidedness gives `SV_up − SV_down` mechanical alignment with label sign — informative but partly tautological; AFML Ch. 5 fractional differentiation residualises the contemporaneous coupling.
+- **Predicted effect**: SV asymmetry ΔBSS +0.003 to +0.008 (mechanically aligned, concentrated in high-vol tercile); BPV ratio ΔBSS +0.001 to +0.003 marginal over level; vov +0.001. Total ~0.005–0.010 net of redundancy with H-114. Seed-noise ≈ 0.0008 BSS.
+- **Falsification**: SV asymmetry partial-dependence flat OR sign opposite to forward excursion in ≥1 of 3 vol terciles → leakage suspect, kill. BPV ratio ΔBSS over BPV-level baseline ≤ 0.0008 → drop ratio. Failure mode under simultaneous price+volume jumps (BTC liquidation cascades): BPV staggered-product `|r_i||r_{i-1}|` itself spikes; use truncated-power variation (Mancini 2009) or impose lag ≥ 2 minutes. **Multiscale Stochastic Volatility book has no BPV chapter** — sub-agent verified; do NOT cite for BPV.
+- **References**: Barndorff-Nielsen & Shephard (2004) "Power and bipower variation with stochastic volatility and jumps" *J. Financial Econometrics* 2(1):1-37 DOI `10.1093/jjfinec/nbh001` (web; INDEX add `[VOL]`). Patton & Sheppard (2015) *Rev. Econ. Stat.* 97(3):683-697 (web; INDEX add `[VOL]`). Barndorff-Nielsen-Kinnebrock-Shephard (2010) realized semivariance (web; INDEX add). AFML Ch. 5 (frac-diff) local PDF.
+- **Status**: queued; primary card; H-114 + H-312 kept as queued for granular ablation if H-131 fails.
+- **Cost**: medium (~2 hours engineering + tests + paired retrain).
+- **Dependencies**: H-103 undef-flag pattern.
+
+#### H-132 [P3] Cross-asset (ETH/BTC) features (NEW)
+- **Owner**: IMPLEMENTER + LITERATURE-SCOUT
+- **Asks**: ask 1
+- **Mechanism**: separate `data_download` round fetches ETHUSDT 1m for the same date range. Construct at 20m cadence: `eth_btc_logret_corr_24` (rolling Pearson over 24 1m bars), `eth_btc_basis_proxy = log(ETH_close / BTC_close) − rolling_mean_96`, `eth_resid_20m` (residualised ETH return after single-factor projection on BTC per Liu & Tsyvinski 2021 RFS — the residual carries asset-specific information beyond the common factor). **Hard requirement**: drop the bar entirely if `ETH.close_time > BTC.close_time` for that bar; do NOT forward-fill (would silently introduce lag-1 staleness violating CONSTITUTION I.6). Cost-flag: triggers feature realignment per CONSTITUTION I.6.
+- **Predicted effect**: ΔBSS ∈ [+0.001, +0.004], concentrated in high-vol tercile (where ECE = 0.17 hurts most) via correlation-spike feature; marginal over BTC autocorrelation small (BTC absorbs ~70% of ETH 1m signal). Lead-lag direction is regime-dependent (ETH leads in risk-off; BTC leads in 2024 ETF-era rallies) — non-stationary.
+- **Falsification**: paired offline retrain require ΔBSS ≥ 0.005 lift AND positive lift in ≥2 of 3 vol terciles (per AFML Ch. 8 MDA on residualised feature). Below threshold → drop entire block (parsimony beats marginal gain when introducing observation-time risk).
+- **References**: Liu & Tsyvinski (2021) "Risks and Returns of Cryptocurrency" *Rev. Fin. Stud.* 34(6):2689-2727 DOI `10.1093/rfs/hhaa113` (web; INDEX add `[CROSS-ASSET]` new tag). Alexander, Heck, Kaeck (2022) "The role of binance in bitcoin volatility transmission" *Applied Mathematical Finance* 29(1) (web; INDEX add `[CROSS-ASSET]`). AFML Ch. 8 (feature importance — local PDF).
+- **Status**: queued. New INDEX tag `[CROSS-ASSET]`.
+- **Cost**: medium-high (separate `data_download` round + offline retrain ~1.5 hours total).
+- **Dependencies**: separate ETHUSDT data download.
+
+### Ask 2 — σ_epistemic → decisions
+
+#### H-209 [P4] Cantelli-bound sized entries via virtual-ensemble σ (NEW)
+- **Owner**: IMPLEMENTER + THEORIST
+- **Asks**: ask 2
+- **Mechanism**: `cantelli_decision_rule` is already implemented in `src/uncertainty.py`. Wire into the backtest: open size = `clip(p_lower_cantelli − τ, 0, max_size)` where `p_lower = max(0, p̂ − k·σ)` from Cantelli's inequality at confidence `1 − 1/(1+k²)`. Sweep `k ∈ {0, 0.5, 1.0, 1.5, 2.0}` on validation Sharpe with `n_trades ≥ 50` stability filter; apply val-chosen `k*` to test once. Bailey-Borwein DSR over the joint `(τ, k)` grid; CSCV PBO via H-192 helper. **CITATION CORRECTION** (round-016 §4.1): the `(p − q̂)/(1 − q̂)` confidence-margin sizing referenced elsewhere comes from Vovk-Gammerman-Shafer (2005) Ch. 3 / Angelopoulos & Bates (2021) §2.2 (arXiv 2107.07511) — NOT Lekeufack §V-C (which is buy/short/abstain on interval-straddle).
+- **Predicted effect**: at val-chosen `k*` ≠ 0, ΔSharpe +0.05 to +0.20 vs binary `baseline_offline_tau` if σ is informative; multi-strategy DSR > 0.95 only if k\* ≠ 0 and lift survives `(τ × k)` deflation. Seed-noise ≈ 0.02 Sharpe.
+- **Falsification**: `k* = 0` wins the val grid (no σ-dependence) OR ΔSharpe at val-chosen `k*` ≤ +0.05 → sizing is a tax on a non-edge; kill.
+- **References**: Cantelli's inequality (textbook, Wainwright High-Dim Stats Ch. 1 — local Desktop). Malinin, Prokhorenkova, Ustimenko (2021) ICLR arXiv 2006.10562 (INDEX). Angelopoulos & Bates (2021) "A Gentle Introduction to Conformal Prediction" arXiv 2107.07511 (web; INDEX add). `src/uncertainty.py::cantelli_decision_rule` already implemented.
+- **Status**: queued (P4). Distinct from H-302 (σ-abstention) and H-25 (Mondrian-ACI margin sizing) — three orthogonal axes.
+- **Cost**: medium (~2 hours; no retrain — uses persisted offline model).
+- **Dependencies**: H-108 (CatBoostEnsemble — accepted round-003); H-190 (block-bootstrap CI on Sharpe lift).
+
+#### H-210 [P3] Virtual-ensemble agreement gate (NEW)
+- **Owner**: IMPLEMENTER + THEORIST
+- **Asks**: ask 2
+- **Mechanism**: when n_virtual virtual-ensemble predictions disagree, abstain. Specifically: for each test bar compute `n_above_tau = sum(virtuals > τ)`; abstain if `n_above_tau ∈ [0.25 · n_virtual, 0.75 · n_virtual]` (the "virtuals straddle τ" zone). CatBoost-side analog of the Mondrian-ACI prediction-set abstention. Orthogonal to σ-magnitude — measures *disagreement rate*, not σ.
+- **Predicted effect**: paired Brier improvement on the gated subset > seed-noise band (σ_seed ≈ 0.001 Brier per regime). At fixed trade rate, expect Brier reduction ≈ 0.003.
+- **Falsification**: gated-subset Brier ≤ ungated-subset Brier within seed-noise band → agreement is uninformative; kill.
+- **References**: Geifman & El-Yaniv (2017) selective classification arXiv 1705.08500 (INDEX). Malinin et al. 2021 (INDEX).
+- **Status**: queued (P3). Pair with H-209 once H-209 picks `k*`.
+- **Cost**: low (~1 hour; uses persisted virtual-ensemble outputs from H-108).
+- **Dependencies**: H-108.
+
+### Ask 3 — Walk-forward retraining
+
+#### H-150 [P5] Walk-forward retraining schedule (REFINES H-310-a)
+- **Owner**: IMPLEMENTER + THEORIST
+- **Asks**: ask 3
+- **Mechanism**: every K = 1500 decision bars (≈ 20 days at M=20; the override §4 tightening of H-310-a's K=2160), retrain CatBoost from scratch on `[t0, t-1]` with same hyperparameters (no HPO until H-105 lands), persist as `model_window_NNN.cbm`, generate `p_offline` forward through next K bars. Online ARF does not reset; bookmarked "model changed at bar N" event lets the streaming layer read the boundary. Engineering harness lives in H-310-a; H-150 specifies the cadence and falsifier.
+- **Predicted effect**: per-refit ΔBSS ∈ [+0.005, +0.02] vs static fit; gain concentrated in high-vol tercile (round-005 offline ECE 0.171); test Sharpe shift +0.05 to +0.20 across refits with high variance. Seed-noise band ≈ 0.003 BSS / 0.02 Sharpe.
+- **Falsification**: walk-forward test Brier ≥ frozen-model test Brier minus seed-noise band (i.e., retraining must not cost calibration globally; if it does, K is too small — re-grid up).
+- **References**: López de Prado, *AFML* (2018) Ch. 7 (purged CV) — local PDF. Sugiyama & Kawanabe (2012) Ch. 1–3 (covariate-shift adaptation) — local PDF. Microsoft Qlib walk-forward template `https://github.com/microsoft/qlib` (web; engineering pattern reference).
+- **Status**: queued (P5). Refines H-310-a's `refit_cadence_bars`.
+- **Cost**: medium-high (per-refit train ~2 min × ~21 refits ≈ 45 min wall; engineering in H-310-a).
+- **Dependencies**: H-310-a engineering harness; H-320-a / H-190 paired CI on ΔBSS.
+
+#### H-151 [P4] Drift-triggered retrain via PageHinkley + KSWIN on running LAC score (NEW)
+- **Owner**: IMPLEMENTER + THEORIST
+- **Asks**: ask 3
+- **Mechanism**: schedule-based (H-150) is necessary but not sufficient. Stream the running LAC score `s_t = 1 − p̂(y_t | x_t)` on the labeled stream into a PageHinkley detector AND a KSWIN detector (Kolmogorov-Smirnov windowing — captures distributional shift, not just mean shift). On either signal, force ahead-of-schedule retrain. ADWIN already in River and used inside the ARF — that monitors per-tree error; this card adds a top-level monitor on the LAC score directly.
+- **Predicted effect**: PageHinkley + KSWIN signals correlate (Spearman > 0.4) with subsequent paired Brier degradation on the next 100 bars.
+- **Falsification**: Spearman < 0.4 → trigger is a noise generator; kill.
+- **References**: Bifet & Gavaldà (2007) ADWIN (INDEX). Raab et al. (2020) "Reactive Soft Prototype Computing for Concept Drift Streams" (KSWIN) Neurocomputing (web; INDEX add). Mansour Zoubeirou A Mayaki (2022) autoregressive drift (web).
+- **Status**: queued (P4).
+- **Cost**: medium (~3 hours engineering + tests).
+- **Dependencies**: H-150 as on-schedule complement; H-207 (ADWIN-triggered q_t reset) pairs.
+
+#### H-152 [P3] Post-retrain feature-importance audit (HOUSEKEEPER-grade)
+- **Owner**: HOUSEKEEPER
+- **Asks**: ask 3
+- **Mechanism**: when a retrain fires (H-150 or H-151), compare top-50 feature importances against the previous retrain. If ≥ 5 features rank-flip out of the top 50, log a `FEATURE_IMPORTANCE_DRIFT` event. Feeds into pruning decisions; does not gate retraining.
+- **Predicted effect**: zero (audit card; the value is the diagnostic).
+- **Falsification**: drift events do not correlate (Spearman > 0.3) with subsequent test Brier degradation → audit signal is noise; demote.
+- **References**: AFML Ch. 8 (feature importance — local PDF).
+- **Status**: queued (P3).
+- **Cost**: low.
+- **Dependencies**: H-150 / H-151.
+
+### Ask 4 — Asymmetric weighting
+
+#### H-153 [P4] Tail-truncated Huber-saturated asymmetric weighting (REFINES H-303)
+- **Owner**: IMPLEMENTER + THEORIST
+- **Asks**: ask 4
+- **Mechanism**: define `w_i = min(w_max, (loss_i / median_loss)^β)` with `w_max = 5` (CRITIC-checkable cap, prevents tail from dominating) and `β = 1.0` (linear above median). On the upper-barrier label, `loss_i` for false negatives = foregone PnL; for false positives = realized stop-loss-minus-cost. Strict `w_max = 5` cap per Cont (2001) stylized facts: BTC log-returns have α ≈ 3-4 power-law tail; uncapped tail upweighting blows up generalization. Pair with H-020 (CVaR-α tail) only if H-303's saturated linear weighting plateaus.
+- **Predicted effect**: paired offline test ECE drops ≥ 0.005 in high-vol tercile; mean p shifts from 0.205 toward 0.097 (base rate). NOT just paired ROC-AUC rise (CONSTITUTION IV: ROC-AUC alone never accepts).
+- **Falsification**: paired offline test ECE shift ≤ 0.001 (within 0.5σ_seed) AND mean p movement ≤ 0.02 → weighting carries no marginal information; kill.
+- **References**: Huber (1964) "Robust estimation of a location parameter" *Ann. Math. Stat.* 35:73 (web). Wainwright *High-Dim Stats* Ch. 1-2 (M-estimation under heavy tails) local Desktop. Cont (2001) "Empirical properties of asset returns: stylized facts and statistical issues" *Quantitative Finance* 1:223 (web).
+- **Status**: queued (P4); narrows H-303 to one specific saturated form. H-303's 27-cell ablation grid kept as queued.
+- **Cost**: medium (FAST_MODE ~1 hour).
+- **Dependencies**: H-103 undef-flag, H-102 sibling weight import.
+
+### Ask 5 — Strategy improvement
+
+#### H-160 [P5] First-touch (true triple-barrier) label retrain (LIFTS H-023)
+- **Owner**: IMPLEMENTER + THEORIST + LITERATURE-SCOUT
+- **Asks**: ask 5
+- **Mechanism**: re-run `feature_build.ipynb` and `offline_train.ipynb` with LdP triple-barrier label `1[upper_barrier_hit_first within M_horizon]` instead of current `1[max excursion ≥ α]`. Horizon `M_horizon` matches backtest's `c_stop` lookahead. Reference implementation: AFML Snippets 3.3-3.5 pp. 48-50 (`getEvents`, `applyPtSlOnT1`, `getBins`); symmetric horizontal barriers (`ptSl=[ptSl,ptSl]`) match this project's symmetric backtest. THEORIST estimate: at α=0.00411 with 20-min horizon, BTC 1m σ̂ ≈ 4-8bp → barriers near ±1σ of horizon RV; expected label flip rate 15-25% of bars, mostly upper-then-lower paths currently y=1 should-be y=0 under first-touch. AFML §3.9 dropLabels procedure (p. 54) drops minPct < 5% classes if vertical-barrier hits dominate.
+- **Predicted effect**: ΔSharpe +0.10 to +0.30 on test, mostly via reduced FP density at operating threshold. At val-chosen τ\* under triple-barrier label, test Sharpe > 0.5 with stationary-block-bootstrap p_boot < 0.05 (block ≈ 24 bars per H-190) AND CSCV PBO < 0.5 (per H-192).
+- **Falsification**: at val-chosen τ\* under triple-barrier label, test Sharpe ≤ 0 OR p_boot ≥ 0.10 OR CSCV PBO ≥ 0.5 → model genuinely has no edge at this horizon; Phase D pivots to feature research (H-130/131/132). Or: retrained model Brier improvement ≤ 0.5% → path-asymmetry signal isn't there.
+- **References**: AFML Ch. 3.4-3.6 pp. 45-51 (local PDF — Snippets 3.3 + 3.4 + 3.5). Hudson & Thames blog `https://hudsonthames.org/does-meta-labeling-add-to-signal-efficacy-triple-barrier-method/` (web; INDEX add). mlfinlab `https://github.com/hudson-and-thames/mlfinlab` (web; INDEX add — `mlfinlab.labeling.labeling.get_events` matches Snippets 3.3-3.4 verbatim). nkonts/barrier-method `https://github.com/nkonts/barrier-method` for vectorized variant.
+- **Status**: queued (P5; lifts H-023). Runs only if H-024 (no-stop) does NOT deliver ΔSharpe > +0.5 with p_boot < 0.05.
+- **Cost**: high (full retrain ~45 min budget; tag `backtest`).
+- **Dependencies**: H-024 first-pass result; H-190 stationary block bootstrap; H-192 CSCV.
+
+#### H-161 [P5] Meta-labeling per LdP §3.6 (LIFTS H-022; CRITICAL ARCHITECTURAL PIN)
+- **Owner**: IMPLEMENTER + THEORIST + LITERATURE-SCOUT
+- **Asks**: ask 5
+- **Mechanism**: secondary CatBoost on `(features ⊕ p_online)` predicting `1[trade_was_profitable_after_costs]` on the subset where `p_online > τ_lower`. Primary model emits the side; meta-model emits bet/no-bet. **CRITICAL ARCHITECTURAL PIN**: meta-model input is `(features ⊕ p_online)` ONLY — `p_offline` is strictly absent. Reason: round-015 contract — `p_online` already conditions on `p_offline` by construction; feeding both regresses child onto parent's parent, recreating the forbidden combiner pathology (round-014 §4.3 / round-016 §4.3 sub-agent correction). AFML Snippet 3.7 pattern: when `side` provided, `out['ret'] *= side`, `bin = 0 if ret ≤ 0`. Probability of secondary class-1 → bet **size** (AFML §3.7 pp. 52-53). Meta-train and meta-eval temporal splits with purging (AFML Ch. 7).
+- **Predicted effect**: hit-rate +2-5pp; ΔSharpe +0.15 to +0.40. Subset-size floor: ~150 positive trades (below this, secondary classifier overfits) — round-015 had ~700 trades total at τ\*=0.44 with ~300 positives; n_trades floor ≈ 500 (≥150 positives) over the meta-training window.
+- **Falsification**: 5×2 nested CV meta-Brier no better than `p_online`-only logistic baseline (Δ ≤ 0.005) → meta-labeling adds friction; kill. Also: gated trade subset precision NOT higher than ungated → meta-model is uninformative; kill. n_positives < 150 in any meta-train fold → statistically inadmissible.
+- **References**: AFML Ch. 3.6-3.8 pp. 50-53 (local PDF; Snippets 3.7 + 3.8). Hudson & Thames blog (web; INDEX add). mlfinlab labeling docs (web; INDEX add). Wikipedia "Meta-Labeling".
+- **Status**: queued (P5; lifts H-022). Runs only after a positive base strategy emerges from H-024 / H-160.
+- **Cost**: high (full secondary-model train; tag `backtest`).
+- **Dependencies**: H-024 OR H-160 producing positive base; H-190 / H-192.
+
+### Ask 6 — Online ensembling
+
+#### H-170 [P4] Online stacking via streaming logistic-regression meta-learner (NEW)
+- **Owner**: IMPLEMENTER + THEORIST + LITERATURE-SCOUT
+- **Asks**: ask 6
+- **Mechanism**: per-bar, four base online learners produce probabilities — `[ARFClassifier (current), SRPClassifier, HoeffdingAdaptiveTreeClassifier, river.linear_model.LogisticRegression]`, each consuming `selected_features ⊕ p_offline`. A fifth-stage River `LogisticRegression` (Adam optimizer or plain SGD) consumes the **four base probabilities AS its input features** (NOT raw features — Wolpert 1992 standard) and learns to combine them. Online stacking; meta-learner is itself online; combination weights adapt as bases drift. Mondrian-ACI on top of the meta-output preserves coverage (post-hoc on any score function). **Distinct from H-305**: H-170 is a learned meta-learner; H-305 is a Hedge-update controller with regime-conditional weights.
+- **Predicted effect**: paired BSS on test ≥ +0.01 over best single base. Per-regime Brier of meta lower than min over individual bases by Δ ∈ [-0.001, +0.005] (Hedge-style regret bound `R_T ≤ √(T ln K / 2)`).
+- **Falsification**: paired BSS Δ ≤ +0.005 (within 6× seed-noise σ_seed ≈ 0.0008) → bases too correlated, online stacking adds nothing; kill.
+- **References**: Wolpert (1992) "Stacked generalization" *Neural Networks* 5:241 (web; INDEX add). Ting & Witten (1999) "Issues in Stacked Generalization" *JAIR* 10:271 (web; INDEX add). Pesaranghader (2017) arXiv 1709.02457 (web). Wozniak et al. (2014) Bayesian online ensembles (web). abuyukcakir/gooweml `https://github.com/abuyukcakir/gooweml` (web; GOOWE-ML pattern).
+- **Status**: queued (P4).
+- **Cost**: medium (~3 hours engineering + tests; per-run wall ~5 min).
+- **Dependencies**: H-204 (River expert comparison) shortlists the K=4 bases.
+
+#### H-171 [P3] Bayesian Model Averaging weights, online (NEW)
+- **Owner**: IMPLEMENTER + THEORIST
+- **Asks**: ask 6
+- **Mechanism**: maintain online posterior weights `w_t ∝ exp(−cumulative_log_loss_t)` per base learner with exponential forgetting `γ ∈ [0.95, 0.999]`. Simpler-but-weaker companion to H-170; if H-170 ships, H-171 is a fast-fail comparator deciding whether the learned meta is worth its complexity. **Note explicitly**: BMA collapses to the best single model under non-stationarity — this is a feature, not a bug, when one base genuinely dominates.
+- **Predicted effect**: BMA performs equal to or worse than H-170 by paired BSS Δ ∈ [-0.005, 0]. Gives a clean "is the meta-learner adding non-trivial structure" diagnostic.
+- **Falsification**: BMA performance within 1σ of H-170 → meta-learner adds no non-linear structure; H-170 is overfitting.
+- **References**: Raftery, Gneiting et al. (2005) "Using Bayesian Model Averaging to Calibrate Forecast Ensembles" *Monthly Weather Rev.* 133:1155 (web; INDEX add). Sloughter et al. (2007) (web). "Bayesian Ensembling: Insights from Online Optimization and Empirical Bayes" arXiv 2505.15638 (web).
+- **Status**: queued (P3); fast-fail comparator to H-170.
+- **Cost**: low (~1 hour after H-170 lands).
+- **Dependencies**: H-170 (runs immediately after as comparator).
+
+### Ask 7 — Per-trade postmortem
+
+#### H-180 [P4] Per-trade attribution dataframe (NEW; substrate for Ask 7)
+- **Owner**: IMPLEMENTER
+- **Asks**: ask 7
+- **Mechanism**: extend `simulate_inventory_aware` (or wrap it) to emit a per-trade `parquet` with columns: `entry_bar`, `exit_bar`, `entry_p_offline`, `entry_p_online`, `entry_sigma_epistemic`, `entry_q_t`, `entry_regime`, `realized_pnl_bp`, `bars_held`, `exit_reason ∈ {profit_barrier, stop_barrier, timeout}`, `cost_paid_bp`. Substrate for everything else in Ask 7. The H-306 spawning rule (round-014) ingests this output.
+- **Predicted effect**: zero (data-emission round; the value is the substrate).
+- **Falsification**: trivial; accepts on schema correctness + smoke test (every column populated, finite, `exit_reason` ∈ valid set, n_trades matches `simulate_inventory_aware` aggregate count).
+- **References**: AFML Ch. 14 (backtest statistics — local PDF); existing `Trade` dataclass in `src/backtest.py`.
+- **Status**: queued (P4).
+- **Cost**: low (~1 hour engineering).
+- **Dependencies**: none.
+
+#### H-181 [P4] SHAP attribution on losing trades (NEW; Ask 7 diagnosis)
+- **Owner**: IMPLEMENTER + THEORIST
+- **Asks**: ask 7
+- **Mechanism**: on the losing-trade subset (per-trade `pnl_bp < 0` from H-180), compute SHAP values for the offline CatBoost prediction at entry. Report top-10 features whose SHAP-at-loss differs from SHAP-at-win by Mann-Whitney U p < 0.01 (Bonferroni or BHY-FDR over the 726 features). Identifies features the offline model is most miscalibrated on. Feeds into H-130 / H-131 / H-132 prioritization for Phase D.
+- **Predicted effect**: at least three features show p < 0.01 with effect sign consistent across two non-overlapping windows.
+- **Falsification**: zero features pass p < 0.01 OR effect sign inconsistent across windows → SHAP-at-loss is noise; kill.
+- **References**: SHAP `https://shap.readthedocs.io/` (web; INDEX add). Bieganowski & Slepaczuk (2026) arXiv 2602.00776 (web; INDEX add) for the SHAP-on-microstructure pattern.
+- **Status**: queued (P4).
+- **Cost**: medium (SHAP on 31,486 test predictions ~10 min on CPU).
+- **Dependencies**: H-180.
+
+#### H-182 [P3] Conditional Sharpe by feature regime (NEW; Ask 7)
+- **Owner**: IMPLEMENTER
+- **Asks**: ask 7
+- **Mechanism**: per `parkinson_var` tercile × `Hurst` tercile (when H-040 lands), compute Sharpe with stationary-block-bootstrap CI (using H-190). Strategy-side analog of `calibration_by_regime`. 9 cells × Sharpe + CI per cell.
+- **Predicted effect**: at least one regime cell has Sharpe CI not crossing zero (after Bonferroni or BHY-FDR over 9 cells) → that cell becomes a candidate for regime-conditional sizing.
+- **Falsification**: every cell's Sharpe CI crosses zero after BHY-FDR → no regime-conditional alpha; kill regime-conditional sizing axis.
+- **References**: AFML Ch. 14 (local). Hurst/DFA in Multiscale Stochastic Volatility (local — multi-scale OU only, NOT BPV per round-016 §4.2 correction).
+- **Status**: queued (P3).
+- **Cost**: low.
+- **Dependencies**: H-180, H-190, H-040.
+
+### Ask 8 — Bootstrap suite
+
+#### H-190 [P5] Stationary block bootstrap for Sharpe / Sortino / max DD (NEW; subsumes part of H-320-a)
+- **Owner**: IMPLEMENTER + LITERATURE-SCOUT
+- **Asks**: ask 8
+- **Mechanism**: implement stationary-block-bootstrap with auto-block-length per Politis & White (2004) plug-in: `b_opt = ((2 ĝ²(0)) / G²)^(1/3) N^(1/3)` where ĝ uses the flat-top window `λ(x) = 1 for |x| ≤ 1/2; 2(1−|x|) for 1/2 < |x| ≤ 1; 0 else`; M chosen by Politis-White rule. Produces valid CIs for ratio-of-means trading metrics under weak dependence + Hadamard-differentiable functionals (delta-method composition: vdV&W §3.9 Thm 3.9.11 + Künsch 1989 Thm 3.1). **No silent fallback** to plain bootstrap if assumptions violated — raise (pinned by test).
+- **Predicted effect**: on shuffled-iid data, CI matches IID bootstrap to within 5%; on autocorrelated synthetic, widens correctly with ACF. On real BTCUSDT 1m PnL with heavy tails + regime breaks, CI may under-cover by 10-25% (THEORIST). Max-DD CI under-covers more severely (~30%) — path functional, not Hadamard-differentiable.
+- **Falsification**: on synthetic IID, CI half-width differs from IID-bootstrap by > 5% → broken. On synthetic GARCH(1,1) + Student-t(ν=4) calibrated to BTCUSDT, empirical 95% coverage < 0.85 → block-length plug-in unstable; raise rather than silently return.
+- **References**: Politis & Romano (1994) JASA 89:1303 (INDEX). Politis & White (2004) Econometric Reviews 23:53 (INDEX); Patton-Politis-White (2009) correction (INDEX). Künsch (1989) "The jackknife and the bootstrap for general stationary observations" *Annals of Statistics* 17:1217 (web; INDEX add — block-bootstrap consistency theorem). van der Vaart & Wellner Ch. 3.6 + 3.9 (local Desktop pp. 345-358 + 372-387; delta-method composition). AFML Ch. 14 pp. 195-210 (local).
+- **Status**: queued (P5); subsumes Sharpe / Sortino / CDaR scope of H-320-a.
+- **Cost**: medium (~3 hours engineering; tests are bulk).
+
+#### H-191 [P4] Per-metric bootstrap for ROC-AUC / PR-AUC / calibration-curve (NEW)
+- **Owner**: IMPLEMENTER + LITERATURE-SCOUT
+- **Asks**: ask 8
+- **Mechanism**: ROC-AUC: DeLong (1988) closed-form variance via Sun & Xu (2014) O((n+m) log(n+m)) — asymptotically valid even under temporal dependence (rank statistic concentrates at O(n^{-1}) under stationary mixing per Hoeffding 1948 + Yoshihara 1976). PR-AUC: stratified bootstrap (positives + negatives separately) per Boyd-Eng-Page 2013, B ≥ 1000. Calibration: per-bin Wilson-score interval (NOT bootstrap — per-bin n is small; Wilson is closed-form on binomial). ECE: debiased ECE_sweep estimator per Roelofs et al. 2022 with stratified bootstrap on samples within predicted-prob bins.
+- **Predicted effect**: synthetic-iid ROC-bootstrap-CI matches DeLong CI within 0.005. PR-AUC naive bootstrap under-covers ~40% at n_pos:n_neg = 1:9; stratified fixes to <10% miscoverage. Calibration bootstrap CI is non-monotone across bins (jagged) and 10-20% wider than Wilson at small n_bin.
+- **Falsification**: synthetic-iid ROC-bootstrap-CI half-width differs from DeLong by > 0.005 → broken. Wilson interval mismatches `statsmodels.stats.proportion.proportion_confint` to 1e-12 → numerical bug.
+- **References**: DeLong et al. (1988) Biometrics 44:837 (INDEX). Sun & Xu (2014) IEEE SPL 21:1389 (INDEX). Boyd-Eng-Page (2013) ECML PKDD LNAI 8190:451 (INDEX). Niculescu-Mizil & Caruana (2005) ICML (INDEX). Roelofs et al. (2022) AISTATS PMLR 151 (INDEX).
+- **Status**: queued (P4); subsumes ROC / PR / calibration scope of H-320-a.
+- **Cost**: medium (~2 hours).
+
+#### H-192 [P3] CSCV PBO refinement (REFINES H-113)
+- **Owner**: IMPLEMENTER + CRITIC
+- **Asks**: ask 8
+- **Mechanism**: refine H-113 (already accepted via round-012 → round-015 cleanup; `cscv_pbo` in `src/backtest.py`). Pin S = 16 partitions (Bailey et al. default), report PBO histogram + per-partition (IS-rank, OOS-rank) scatter, tag any backtest round with `cscv_pbo` for traceability. Round-015 outputs (`cscv_per_strategy.csv`, `cscv_cross_strategy.json`) are canonical reference.
+- **Predicted effect**: zero (refinement card; the value is procedural standardisation).
+- **Falsification**: existing `cscv_pbo` helper produces PBO ≠ 0.000 cross-strategy on round-015 inputs → regression bug.
+- **References**: Bailey, Borwein, López de Prado, Zhu (2014) `https://www.davidhbailey.com/dhbpapers/backtest-prob.pdf` (web; INDEX confirm). pypbo `https://github.com/esvhd/pypbo` (web).
+- **Status**: queued (P3); H-113's refinement.
+- **Cost**: low.
+
+#### H-193 [P4] Per-trade-level bootstrap with overlap embargo (NEW)
+- **Owner**: IMPLEMENTER + THEORIST
+- **Asks**: ask 8
+- **Mechanism**: trades that overlap in time have correlated returns (LdP "trade uniqueness"). At val-τ=0.44 with mean bars_held ≈ 12 (60% of M=20) and trade rate 0.108/bar, overlap rate ≈ 0.74 (THEORIST). Implement (a) sequential bootstrap per AFML Snippet 4.5 — draws made with updated probabilities `δ_j^(2) = ū_j^(2) (Σ_k ū_k^(2))^{-1}` to prevent picking already-overlapping trades; (b) average-uniqueness weighting per AFML Ch. 4.4 p. 61: `ū_i = (Σ u_t,i) / (Σ 1_t,i)`. Sequential bootstrap is preferred (no information loss).
+- **Predicted effect**: plain trade-bootstrap under-covers Sharpe-CI by ~30% at overlap rate ≈ 0.74; LdP-weighted (1/c_t) bootstrap recovers nominal coverage. CI half-width ratio plain/dedup ≈ √ū ≈ 0.88; the 5% match threshold violated at this overlap level.
+- **Falsification**: subsample to non-overlapping trades only (~280 trades) — if dedup'd CI matches plain trade-bootstrap CI within 5% on full set, overlap estimate wrong; if dedup'd CI ≥ 12% wider, H-193 confirmed.
+- **References**: AFML Ch. 4.4-4.7 pp. 61-69 (local PDF; Snippets 4.1 / 4.2 / 4.5). Rao-Pathak-Koltchinskii (1997) JSPI 64:257 (web).
+- **Status**: queued (P4).
+- **Cost**: medium (~2 hours).
+- **Dependencies**: H-180 (per-trade dataframe).
+
+### Round-016 refinements to existing cards
+
+These are summary refinements applied in-place above for the named existing cards. The full text of each is preserved in its existing tier; this section pins the mandate's specific addenda for traceability.
+
+- **H-040** (Hurst / DFA / sample entropy) — addendum confirmed: tie to regime via 2D cube `Hurst tercile × parkinson_var tercile`; CRITIC threshold for keeping Hurst as primary regime signal is any `(H_tercile, p_tercile)` cell with `|ECE − overall_ECE| > 0.02` on offline.
+- **H-115** (permutation entropy m=3, τ=1) — addendum: confirm Bandt-Pompe normalization and stable mergesort tie-breaking; cite Cover & Thomas Ch. 8 (local Desktop) for the entropy floor.
+- **H-114** → SUPERSEDED in primary sequencing by **H-131**; kept queued for granular ablation.
+- **H-102** (sample weighting) — addendum: pair the existing 4-cell ablation matrix with H-153's Huber-saturated form; H-303 27-cell grid stays queued for full sweep.
+- **H-020** (CVaR-α tail) — addendum: gated by H-303 / H-153; explicit cap `5 × mean_loss` (Cont 2001 stylized facts).
+- **H-024** (no-stop variant) — addendum stands; runs against round-015 unified harness with `c_stop=∞` (round 017).
+- **H-025** (Mondrian-ACI sized) — refinement: `(p − q̂)/(1 − q̂)` confidence-margin sizing — **CITATION CORRECTION** per round-016 §4.1: cite Vovk-Gammerman-Shafer (2005) Ch. 3 and Angelopoulos & Bates (2021) §2.2 (arXiv 2107.07511, web; INDEX add); NOT Lekeufack §V-C (sub-agent verified — Lekeufack §V-C is buy/short/abstain on interval-straddle).
+- **H-204** (River ARF vs SRP vs HAT) — refinement: blocking-precondition for H-170; ships first, shortlists K=4 bases for online stacking.
+- **H-206** (σ_epistemic as conformal feature) — refinement: two specific score-function variants — (a) `s_i = (1 − p̂_i(y_i)) / σ_epistemic_i` (uncertainty-normalized LAC); (b) `s_i = (1 − p̂_i(y_i)) + λ · σ_epistemic_i` (additive penalty, λ tuned on cal). Falsification: monotone rank correlation > 0.6 between set width and σ_epistemic on eval; otherwise the score function isn't extracting epistemic information.
+- **H-207** (ADWIN-triggered q_t reset) — refinement: soft-reset `q_t` halfway toward prior `α` rather than fully (preserve adaptation history). Pair with H-151.
+- **H-208** (streaming conformal trade gate) — UNBLOCK: H-011 + H-202 dependencies are accepted. Mechanism: abstain when `predict_set` returns `{0,1}` (full set = no information at given α). Pair with H-25 — gate decides whether to trade; sizing decides how big.
+- **H-022** → **H-161** (lifted; H-161 is the active card under the round-016 mandate).
+- **H-023** → **H-160** (lifted).
+- **H-113** → **H-192** (refined; protocol pinned).
+
+---
+
 ## Notes
 - Items at `[P5]` are unconditionally scheduled before `[P3]`.
 - "BLOCKED" items wait until the unblock-er is `accept`ed.
 - New ideas append to the appropriate tier section, NOT the top — priority discipline is enforced.
 - Items spawned mid-round are marked with `(spawned by round NNN)` for traceability.
+- Round-016 mandate cards (H-1xx series) live in Tier 7 above; H-3xx series from round-014 lives in Tiers 0/4/5 unchanged.

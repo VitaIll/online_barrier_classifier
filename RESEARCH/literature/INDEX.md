@@ -4,7 +4,7 @@ The autonomous loop's `LITERATURE-SCOUT` checks this index **before** any web se
 
 Documents catalogued: 2026-05-09. Re-run the triage agent to refresh after major Downloads/Desktop changes.
 
-Tags: `[ONLINE]` `[FIN-ML]` `[CALIB-UQ]` `[MICROSTRUCT]` `[VOL]` `[GBM]` `[FEATURES]` `[BACKTEST]` `[STATS-CI]` `[MISC]` `[MATH-FDN]`
+Tags: `[ONLINE]` `[FIN-ML]` `[CALIB-UQ]` `[MICROSTRUCT]` `[VOL]` `[GBM]` `[FEATURES]` `[BACKTEST]` `[STATS-CI]` `[CROSS-ASSET]` `[MISC]` `[MATH-FDN]`
 
 **Where the literature actually lives**:
 - `C:\Users\vitil\Downloads\` — the **applied** finance/ML corpus (López de Prado AFML, conformal prediction, CatBoost paper, Sugiyama covariate shift, Multiscale Stochastic Volatility, Kaufman backtesting, etc.). Default search target for LITERATURE-SCOUT.
@@ -146,4 +146,53 @@ Backs H-320-a (per-metric bootstrap library) and H-320-b (re-render existing acc
 - **Roelofs et al. (2022)** *Mitigating Bias in Calibration Error Estimation* — AISTATS 2022 PMLR 151 — `https://proceedings.mlr.press/v151/roelofs22a.html` (arXiv `https://arxiv.org/abs/2012.08668`). Debiased ECE estimator; equal-mass binning; ECE_sweep selection rule. **Failure**: naïve bootstrap on ECE_bin reproduces the bias inside replicates.
 
 ### [CALIB-UQ] (clarifications, round-014)
-- **Lekeufack, Angelopoulos, Bajcsy, Jordan, Malik (2024)** *Conformal Decision Theory: Safe Autonomous Decisions from Imperfect Predictions* — local PDF `Downloads\conformal_decision_theory.pdf` — also arXiv `https://arxiv.org/abs/2310.05921`. Theorem 1 controller dynamics: λ-update bounded under "eventually safe" data. The σ-as-feature vs σ-as-decision-bound distinction (round-014 H-302 addendum) follows from Lekeufack §3-4.
+- **Lekeufack, Angelopoulos, Bajcsy, Jordan, Malik (2024)** *Conformal Decision Theory: Safe Autonomous Decisions from Imperfect Predictions* — local PDF `Downloads\conformal_decision_theory.pdf` — also arXiv `https://arxiv.org/abs/2310.05921`. Theorem 1 controller dynamics: λ-update bounded under "eventually safe" data. The σ-as-feature vs σ-as-decision-bound distinction (round-014 H-302 addendum) follows from Lekeufack §3-4. **CITATION CORRECTION (round-016)**: §V-C is the **stock-trading buy/short/abstain example** (Eq. 14, p. 6 — `D_λ = 1 if min(Ĉ_λ) > 0; -1 if max(Ĉ_λ) < 0; 0 otherwise`), NOT a sizing-by-confidence-margin section. Multiple H-cards previously cited Lekeufack §V-C for `(p − q̂)/(1 − q̂)` confidence-margin sizing — that formula is in Vovk-Gammerman-Shafer (2005) and Angelopoulos & Bates (2021) §2.2 instead. See round-016 §4.1 for the full correction.
+
+---
+
+## Newly catalogued (round-016, research-planning round)
+
+These references back hypothesis cards H-130, H-131, H-132, H-150, H-151, H-160, H-161, H-170, H-171, H-181, H-190, H-209, H-210 and the citation correction for H-25/H-209 — see `RESEARCH/research_plan_round_016.md` for the per-card mapping.
+
+### [CALIB-UQ] (additions, round-016)
+- **Vovk, Gammerman, Shafer (2005)** *Algorithmic Learning in a Random World* (Springer) — Ch. 3 on confidence and credibility margins. The `(p − q̂)/(1 − q̂)` confidence-margin sizing formula (mis-cited to Lekeufack §V-C in earlier H-cards) lives here. Web (book; not in local Downloads) — purchase or library access required.
+- **Angelopoulos & Bates (2021)** *A Gentle Introduction to Conformal Prediction and Distribution-Free Uncertainty Quantification* — arXiv `https://arxiv.org/abs/2107.07511`. §2.2 reuses the Vovk-2005 confidence-margin formula and gives the canonical APS / RAPS prediction-set construction. Companion repo `https://github.com/aangelopoulos/conformal-prediction` complements Manokhin Ch. 9.
+
+### [VOL] (additions, round-016 — fills BPV / signed-semivariance gap)
+- **Barndorff-Nielsen & Shephard (2004)** *Power and bipower variation with stochastic volatility and jumps* — *J. Financial Econometrics* 2(1):1-37 — DOI `10.1093/jjfinec/nbh001`. Canonical BPV/RV jump-detector definition `BPV = (π/2) Σ |r_i| |r_{i-1}|`. Backs H-131. **Failure**: under simultaneous price+volume jumps (BTC liquidation cascades), BPV staggered-product itself spikes — use truncated-power variation (Mancini 2009) or impose lag ≥ 2 minutes.
+- **Barndorff-Nielsen, Kinnebrock, Shephard (2010)** *Measuring downside risk: realized semivariance* — in *Volatility and Time Series Econometrics* (Bollerslev-Russell-Watson eds.), Oxford UP. `RS^- = Σ r_i² 1{r_i < 0}`; signed semivariance asymmetry. Backs H-131 SV_up / SV_down term.
+- **Patton & Sheppard (2015)** *Good volatility, bad volatility: signed jumps and the persistence of volatility* — *Rev. Econ. Stat.* 97(3):683-697. Confirms `SV^- − SV^+` predicts subsequent volatility asymmetrically. Backs H-131.
+- **Cont (2001)** *Empirical properties of asset returns: stylized facts and statistical issues* — *Quantitative Finance* 1:223. Power-law tail α ≈ 3-4 on financial returns; backs H-153's `w_max = 5` cap (uncapped tail upweighting blows up under heavy tails).
+
+**Important correction (round-016)**: the *Multiscale Stochastic Volatility* book (Fouque-Papanicolaou-Sircar-Sølna 2011, local Downloads) has **NO BPV / realized-variance chapter** — it is option pricing under multi-scale OU mean-reversion, NOT Barndorff-Nielsen jump-robust statistics. Do NOT cite for BPV. Cite for HAR-style multi-scale variance only. Best 10 #8 (line 24) entry refines accordingly.
+
+### [MICROSTRUCT] (additions, round-016)
+- **Bieganowski & Slepaczuk (2026)** *Explainable Patterns in Cryptocurrency Microstructure* — arXiv `https://arxiv.org/abs/2602.00776`. SHAP-leading microstructure features (OFI, spread, VWAP-to-mid) are portable across BTC / ETH / SOL / large-cap cryptos. Backs H-130 (derived flow features) and H-181 (SHAP-at-loss pattern).
+
+### [CROSS-ASSET] NEW SECTION, round-016
+Backs H-132 (cross-asset ETH/BTC features). The local INDEX is silent on cross-asset BTC features; both references are web-only.
+
+- **Liu & Tsyvinski (2021)** *Risks and Returns of Cryptocurrency* — *Rev. Fin. Stud.* 34(6):2689-2727 — DOI `10.1093/rfs/hhaa113`. Single-common-factor structure across BTC/ETH/large-cap crypto; ETH/BTC log-return correlation high but residual carries asset-specific information. **Failure**: cointegration between ETH and BTC is NOT stable (ratio drifted from ~0.055 in Jan 2024 to ~0.030 in early 2025); level-based features non-stationary, must use returns/innovations.
+- **Alexander, Heck, Kaeck (2022)** *The role of binance in bitcoin volatility transmission* — *Applied Mathematical Finance* 29(1). ETH-BTC perp-spot basis spillover documented; lead-lag is sub-hourly. **Failure**: lead-lag direction is regime-dependent (ETH leads in risk-off; BTC leads in 2024 ETF-era rallies) — non-stationary.
+
+### [STATS-CI] (additions, round-016)
+- **Künsch (1989)** *The jackknife and the bootstrap for general stationary observations* — *Annals of Statistics* 17:1217 — JSTOR `https://www.jstor.org/stable/2241719`. Block-bootstrap consistency theorem under α-mixing. Backs H-190's asymptotic-validity argument; vdV&W §3.6 covers IID-only, so block-bootstrap-Sharpe needs Künsch Thm 3.1 composed with vdV&W §3.9 Thm 3.9.11 (delta-method).
+- **Lahiri (2003)** *Resampling Methods for Dependent Data* (Springer) — textbook treatment of block-bootstrap consistency; canonical follow-up to Künsch (1989). Web only.
+- **Bailey, Borwein, López de Prado, Zhu (2014)** *The Probability of Backtest Overfitting* — `https://www.davidhbailey.com/dhbpapers/backtest-prob.pdf`. CSCV / PBO machinery. Backs H-192. Already cited via web in earlier rounds; promote to permanent INDEX entry.
+
+### [FIN-ML] (additions, round-016)
+- **Hudson & Thames** *Does Meta-Labeling Add to Signal Efficacy? Triple Barrier Method* blog — `https://hudsonthames.org/does-meta-labeling-add-to-signal-efficacy-triple-barrier-method/`. Empirical demonstration that meta-labeling improves F1 on synthetic + real triple-barrier data. Backs H-161.
+- **Hudson & Thames** *mlfinlab* repository — `https://github.com/hudson-and-thames/mlfinlab`. Reference implementation of AFML labeling (`mlfinlab.labeling.labeling.get_events` and `add_vertical_barrier` match AFML Snippets 3.3-3.4 verbatim). Backs H-160 / H-161.
+- **nkonts/barrier-method** repository — `https://github.com/nkonts/barrier-method`. Vectorized variant of triple-barrier labeling for engineering reference. Backs H-160.
+
+### [ONLINE] (additions, round-016 — online ensembling stack)
+- **Wolpert (1992)** *Stacked generalization* — *Neural Networks* 5:241. Canonical stacking; meta-learner consumes base outputs as features. Backs H-170. Web (book chapter).
+- **Ting & Witten (1999)** *Issues in Stacked Generalization* — *J. Artificial Intelligence Research* 10:271 — `https://www.jair.org/index.php/jair/article/view/10228`. Stacking with class probabilities (the H-170 mechanism). Backs H-170.
+- **Pesaranghader (2017)** *A Reservoir of Adaptive Algorithms for Online Learning from Evolving Data Streams* — arXiv `https://arxiv.org/abs/1709.02457`. Heterogeneous online ensembling. Backs H-170.
+- **Raab et al. (2020)** *Reactive Soft Prototype Computing for Concept Drift Streams* — *Neurocomputing*. KSWIN drift detector. Backs H-151. Web.
+- **Raftery, Gneiting, et al. (2005)** *Using Bayesian Model Averaging to Calibrate Forecast Ensembles from Dynamical Systems* — *Monthly Weather Review* 133:1155 — `https://journals.ametsoc.org/view/journals/mwre/133/5/mwr2906.1.xml`. Online BMA weights with exponential forgetting. Backs H-171.
+- **abuyukcakir/gooweml** — `https://github.com/abuyukcakir/gooweml`. GOOWE-ML stacked online ensemble pattern. Backs H-170 architecture.
+
+### [BACKTEST] (additions, round-016)
+- **Microsoft Qlib** walk-forward template — `https://github.com/microsoft/qlib`. Modular handler/dataset/model/strategy split. Reference for Phase B refactor and H-150 walk-forward harness pattern.
+- **SHAP** documentation — `https://shap.readthedocs.io/`. Backs H-181 SHAP-at-loss diagnosis.
