@@ -21,7 +21,13 @@ loop-status:
 	$(PYTHON) scripts/loop_status.py
 
 loop-daemon:
-	pwsh scripts/loop_daemon.ps1
+	powershell -ExecutionPolicy Bypass -File scripts/loop_daemon.ps1
+
+loop-daemon-dry:
+	powershell -ExecutionPolicy Bypass -File scripts/loop_daemon.ps1 -DryRun -MaxRounds 2
+
+loop-once:
+	powershell -ExecutionPolicy Bypass -File scripts/loop_daemon.ps1 -MaxRounds 1
 
 critic:
 	$(PYTHON) scripts/critic_check.py
