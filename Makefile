@@ -1,4 +1,4 @@
-.PHONY: test test-fast round preflight fast-train clean lint help loop-status loop-daemon critic compact compact-apply
+.PHONY: test test-fast round preflight fast-train clean lint help loop-status loop-daemon critic compact compact-apply merge-round kill-round
 
 PYTHON ?= python
 
@@ -16,6 +16,8 @@ help:
 	@echo "  make critic        Run CRITIC checklist on current branch"
 	@echo "  make compact       Dry-run compaction (LEDGER, plots, branches, MLflow)"
 	@echo "  make compact-apply Apply compaction"
+	@echo "  make merge-round H=H-005    FF current agent/round-* branch onto master + tag + delete"
+	@echo "  make kill-round H=H-005 R='reason'  Delete current branch + append KILL_LIST"
 
 loop-status:
 	$(PYTHON) scripts/loop_status.py
@@ -43,6 +45,12 @@ compact:
 
 compact-apply:
 	$(PYTHON) scripts/compact_loop_state.py --apply
+
+merge-round:
+	$(PYTHON) scripts/merge_round.py merge --hypothesis $(H)
+
+kill-round:
+	$(PYTHON) scripts/merge_round.py kill --hypothesis $(H) --reason "$(R)"
 
 test:
 	$(PYTHON) -m pytest -q tests/

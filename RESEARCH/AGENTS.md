@@ -87,7 +87,15 @@ chapters; cite chapters.
 
 Return one of: **APPROVE** (script + substantive both green), **REQUEST_CHANGES** (one or more fixable issues, list them), or **VETO** (irrecoverable: leakage, fabricated metrics, scope explosion).
 
-**Veto override**: none. A round with VETO resolves to `iterate` or `kill` and updates KILL_LIST.
+**Handoff** (from `RESEARCH/GIT_DISCIPLINE.md`):
+- APPROVE → round agent runs `python scripts/merge_round.py merge --hypothesis H-NNN`.
+  This fast-forwards master, runs post-merge pytest, tags `round-NNN-accepted`,
+  deletes the branch, pushes to origin if present. **No draft PRs.**
+- REQUEST_CHANGES → one iteration attempt; if still red, kill.
+- VETO → `python scripts/merge_round.py kill --hypothesis H-NNN --reason "<one-line>"`.
+  Appends KILL_LIST.md, deletes the branch. No iteration on VETO.
+
+**Veto override**: none. A round with VETO is killed. No carrying state forward.
 
 ## HOUSEKEEPER
 **Purpose**: keep the repo and loop state clean.
