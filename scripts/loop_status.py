@@ -42,7 +42,7 @@ def _color(s: str, c: str) -> str:
 def _heartbeat_summary() -> str:
     if not HEARTBEAT.exists():
         return _color("[no heartbeat — daemon never started]", "yellow")
-    hb = json.loads(HEARTBEAT.read_text())
+    hb = json.loads(HEARTBEAT.read_text(encoding="utf-8-sig"))
     started = hb.get("started_at") or hb.get("finished_at") or "?"
     try:
         age = dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(started.replace("Z", "+00:00"))
