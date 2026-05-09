@@ -4,7 +4,7 @@ The autonomous loop's `LITERATURE-SCOUT` checks this index **before** any web se
 
 Documents catalogued: 2026-05-09. Re-run the triage agent to refresh after major Downloads/Desktop changes.
 
-Tags: `[ONLINE]` `[FIN-ML]` `[CALIB-UQ]` `[MICROSTRUCT]` `[VOL]` `[GBM]` `[FEATURES]` `[BACKTEST]` `[MISC]` `[MATH-FDN]`
+Tags: `[ONLINE]` `[FIN-ML]` `[CALIB-UQ]` `[MICROSTRUCT]` `[VOL]` `[GBM]` `[FEATURES]` `[BACKTEST]` `[STATS-CI]` `[MISC]` `[MATH-FDN]`
 
 **Where the literature actually lives**:
 - `C:\Users\vitil\Downloads\` — the **applied** finance/ML corpus (López de Prado AFML, conformal prediction, CatBoost paper, Sugiyama covariate shift, Multiscale Stochastic Volatility, Kaufman backtesting, etc.). Default search target for LITERATURE-SCOUT.
@@ -104,10 +104,46 @@ A LITERATURE-SCOUT sub-agent's first action on a hypothesis must be:
 3. Cite local pdf path + page range in HYPOTHESIS.md. No web fallback unless step 2 returns nothing relevant.
 4. Web search is permitted only for: post-2024 publications, very specific implementation details (`river.forest.ARFClassifier` API), or to fill gaps the index has flagged as missing (e.g., explicit River-ecosystem papers).
 
-**Coverage gaps** flagged by the triage:
-- River framework papers (Montiel et al., 2021) — must web-fetch.
-- ARF / SRP / HAT papers (Gomes et al., Bifet et al.) — must web-fetch.
+**Coverage gaps** flagged by the triage (most fetched in round-014; remainder still web-fetch):
+- River framework papers (Montiel et al., 2021) — **CATALOGUED round-014** (web-only; see `[ONLINE]` section).
+- ARF / SRP / HAT papers (Gomes et al., Bifet et al.) — **CATALOGUED round-014** (web-only).
+- Virtual-ensemble paper (Malinin et al. 2021 ICLR) — **CATALOGUED round-014** (web-only).
+- Selective-prediction paper (Geifman & El-Yaniv 2017 NeurIPS) — **CATALOGUED round-014** (web-only).
+- Per-metric bootstrap papers (DeLong 1988, Sun-Xu 2014, Boyd-Eng-Page 2013, Politis-Romano 1994, Politis-White 2004, Niculescu-Mizil-Caruana 2005, Roelofs 2022) — **CATALOGUED round-014** (web-only); see new `[STATS-CI]` section below.
 - High-frequency limit-order-book microstructure beyond a generic primer — must web-fetch when needed.
 - Bailey & López de Prado deflated-Sharpe paper (SSRN) — already cited via web; consider downloading.
+- Barndorff-Nielsen & Shephard (2004) BPV paper — must web-fetch when H-312 runs.
+- Peng et al. (1994) original DFA paper — must web-fetch when H-313 runs.
+- Hasbrouck (1991) VAR-impulse trade-vs-price decomposition — must web-fetch when H-311 runs.
 
 **Refresh trigger**: any time the user mentions a paper not catalogued here, update this file and re-run the HOUSEKEEPER triage.
+
+---
+
+## Newly catalogued (round-014, research-planning round)
+
+These references are web-only (not in local `Downloads/Desktop` corpus). They back hypothesis cards H-302, H-305, H-320-a, H-320-b — see `RESEARCH/research_plan_round_014.md` for the per-card mapping.
+
+### [CALIB-UQ] (additions)
+- **Malinin, Prokhorenkova, Ustimenko (2021)** *Uncertainty in Gradient Boosting via Ensembles* — ICLR 2021 — `https://arxiv.org/abs/2006.10562`. Defines total / data / knowledge uncertainty for binary classification under SGLB virtual ensembles. Underlies CatBoost's `virtual_ensembles_predict` API. Backs H-302.
+- **Geifman & El-Yaniv (2017)** *Selective Classification for Deep Neural Networks* — NeurIPS 2017 — `https://arxiv.org/abs/1705.08500`. Risk-Coverage curve definition; AURC formulation; selective prediction. Backs H-302 secondary diagnostic.
+
+### [ONLINE] (additions)
+- **Montiel et al. (2021)** *River: machine learning for streaming data in Python* — JMLR 22(110) — `https://www.jmlr.org/papers/v22/20-1380.html`. Framework + `predict_proba_one`/`learn_one` contract; `compose.Pipeline`. Backs H-305.
+- **Gomes et al. (2017)** *Adaptive Random Forest for evolving data stream classification* — *Machine Learning* 106(9-10):1469-1495 — DOI `10.1007/s10994-017-5642-8` — Springer link `https://link.springer.com/article/10.1007/s10994-017-5642-8`. ARF + ADWIN drift detector; per-tree Poisson(λ) bagging; warning δ_w ≈ 1e-2, drift δ_d ≈ 1e-5. Backs H-204 + H-305.
+- **Gomes, Read, Bifet (2019)** *Streaming Random Patches for Evolving Data Stream Classification* — ICDM 2019 LNCS — `https://albertbifet.com/streaming-random-patches/`. SRP = global-subspace random patches + Poisson(λ=6) online bagging. Backs H-305 (recommended on heavy-tailed streams).
+- **Bifet & Gavaldà (2009)** *Adaptive Learning from Evolving Data Streams* — IDA 2009 LNCS 5772:249 — DOI `10.1007/978-3-642-03915-7_22`. HAT = Hoeffding tree with per-node ADWIN; alternate-subtree replacement on drift. Backs H-305.
+
+### [STATS-CI] Per-metric confidence intervals & bootstrap schemes (NEW SECTION, round-014)
+Backs H-320-a (per-metric bootstrap library) and H-320-b (re-render existing accepted numbers).
+
+- **DeLong, DeLong, Clarke-Pearson (1988)** *Comparing the Areas under Two or More Correlated Receiver Operating Characteristic Curves: A Nonparametric Approach* — *Biometrics* 44(3):837-845 — DOI `10.2307/2531595` — `https://pubmed.ncbi.nlm.nih.gov/3203132/`. Closed-form ROC-AUC variance via Mann-Whitney U structural decomposition. **Failure**: O(n_pos·n_neg); ties require mid-rank handling.
+- **Sun & Xu (2014)** *Fast Implementation of DeLong's Algorithm for Comparing the Areas Under Correlated Receiver Operating Characteristic Curves* — *IEEE Signal Processing Letters* 21(11):1389-1393 — `https://ieeexplore.ieee.org/document/6851192/`. Mid-rank reformulation gives O((n+m) log(n+m)).
+- **Boyd, Eng, Page (2013)** *Area under the Precision-Recall Curve: Point Estimates and Confidence Intervals* — ECML PKDD 2013, LNAI 8190:451-466 — `https://link.springer.com/chapter/10.1007/978-3-642-40994-3_29` (PDF `https://pages.cs.wisc.edu/~boyd/aucpr_final.pdf`). Stratified bootstrap PR-AUC with B≥1000; logit/binomial alternatives recommended over naïve bootstrap. **Failure**: bias-down at small n_pos.
+- **Politis & Romano (1994)** *The Stationary Bootstrap* — *JASA* 89(428):1303-1313 — `https://www.tandfonline.com/doi/abs/10.1080/01621459.1994.10476870`. Geometric-block-length bootstrap; valid for stationary α-mixing series. **Failure**: sensitive to mis-specified p (block length).
+- **Politis & White (2004)** *Automatic Block-Length Selection for the Dependent Bootstrap* — *Econometric Reviews* 23(1):53-70 — `https://public.econ.duke.edu/~ap172/Politis_White_2004.pdf` (correction Patton-Politis-White 2009 same authors `https://public.econ.duke.edu/~ap172/Patton_Politis_White_2009.pdf`). Plug-in optimal block length from flat-top-lag spectral-density estimate; b̂ ∝ N^(1/3).
+- **Niculescu-Mizil & Caruana (2005)** *Predicting Good Probabilities With Supervised Learning* — ICML 2005 — `https://dl.acm.org/doi/10.1145/1102351.1102430` (PDF `https://www.cs.cornell.edu/~alexn/papers/calibration.icml05.crc.rev3.pdf`). Calibration evaluation framework; per-bin Wilson recommended externally (paper does not propose its own per-bin CI).
+- **Roelofs et al. (2022)** *Mitigating Bias in Calibration Error Estimation* — AISTATS 2022 PMLR 151 — `https://proceedings.mlr.press/v151/roelofs22a.html` (arXiv `https://arxiv.org/abs/2012.08668`). Debiased ECE estimator; equal-mass binning; ECE_sweep selection rule. **Failure**: naïve bootstrap on ECE_bin reproduces the bias inside replicates.
+
+### [CALIB-UQ] (clarifications, round-014)
+- **Lekeufack, Angelopoulos, Bajcsy, Jordan, Malik (2024)** *Conformal Decision Theory: Safe Autonomous Decisions from Imperfect Predictions* — local PDF `Downloads\conformal_decision_theory.pdf` — also arXiv `https://arxiv.org/abs/2310.05921`. Theorem 1 controller dynamics: λ-update bounded under "eventually safe" data. The σ-as-feature vs σ-as-decision-bound distinction (round-014 H-302 addendum) follows from Lekeufack §3-4.
