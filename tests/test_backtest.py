@@ -316,3 +316,314 @@ def test_p_length_mismatch_raises():
     close, high, low = _flat_path(120)
     with pytest.raises(ValueError):
         backtest.simulate_inventory_aware(boundaries, close, high, low, np.zeros(11))
+
+
+# -----------------------------------------------------------------------------
+# Phase A §A.3 — sized harness, c_stop=∞, walk-forward
+# -----------------------------------------------------------------------------
+
+def test_sized_harness_unit_size_matches_unit_position():
+    """size=1 everywhere ⇒ same trade outcome as simulate_inventory_aware."""
+    M = 10
+    base = 100.0
+    phi = 0.005
+    tp_price = base * math.exp(phi)
+    events = [
+        (0, base, base, base), (10, base, base, base),
+        (12, base, tp_price + 0.01, base - 0.01),
+    ]
+    close, high, low = _scripted_path(events, n_minutes=200)
+    boundaries = _boundaries(20, M=M)
+    p = np.zeros(20)
+    p[1] = 0.99
+    open_signal = p > 0.5
+    size = np.ones(20)
+    res_unit = backtest.simulate_inventory_aware(
+        boundaries, close, high, low, p, tau_open=0.5, M=M, phi=phi,
+        c_stop=0.05, cost_bps=0.0,
+    )
+    res_sized = backtest.simulate_inventory_aware_sized(
+        boundaries, close, high, low, open_signal, size,
+        M=M, phi=phi, c_stop=0.05, cost_bps=0.0,
+    )
+    assert res_sized.metrics["n_trades"] == res_unit.metrics["n_trades"]
+    assert res_sized.metrics["total_log_return"] == pytest.approx(
+        res_unit.metrics["total_log_return"], rel=1e-9
+    )
+
+
+def test_sized_harness_half_size_halves_pnl():
+    """size=0.5 ⇒ realised gross PnL is half (cost still applies on full position)."""
+    M = 10
+    base = 100.0
+    phi = 0.005
+    tp_price = base * math.exp(phi)
+    events = [
+        (0, base, base, base), (10, base, base, base),
+        (12, base, tp_price + 0.01, base - 0.01),
+    ]
+    close, high, low = _scripted_path(events, n_minutes=200)
+    boundaries = _boundaries(20, M=M)
+    open_signal = np.zeros(20, dtype=bool)
+    open_signal[1] = True
+    size = np.full(20, 0.5)
+    res = backtest.simulate_inventory_aware_sized(
+        boundaries, close, high, low, open_signal, size,
+        M=M, phi=phi, c_stop=0.05, cost_bps=0.0,
+    )
+    assert res.metrics["n_trades"] == 1
+    t = res.trades.iloc[0]
+    # gross log = phi (TP touched); net log = 0.5*gross - 2*cost = 0.5*phi.
+    assert t["pnl_log_gross"] == pytest.approx(phi, rel=1e-9)
+    assert t["pnl_log_net"] == pytest.approx(0.5 * phi, rel=1e-9)
+
+
+def test_sized_harness_charges_full_cost_at_half_size():
+    """At size=0.5 with cost, net = 0.5*gross - 2*cost (full cost)."""
+    M = 10
+    base = 100.0
+    phi = 0.005
+    tp_price = base * math.exp(phi)
+    events = [
+        (0, base, base, base), (10, base, base, base),
+        (12, base, tp_price + 0.01, base - 0.01),
+    ]
+    close, high, low = _scripted_path(events, n_minutes=200)
+    boundaries = _boundaries(20, M=M)
+    open_signal = np.zeros(20, dtype=bool)
+    open_signal[1] = True
+    size = np.full(20, 0.5)
+    cost_bps = 5.0
+    res = backtest.simulate_inventory_aware_sized(
+        boundaries, close, high, low, open_signal, size,
+        M=M, phi=phi, c_stop=0.05, cost_bps=cost_bps,
+    )
+    expected_net = 0.5 * phi - 2.0 * cost_bps * 1e-4
+    assert res.trades.iloc[0]["pnl_log_net"] == pytest.approx(expected_net, rel=1e-9)
+
+
+def test_sized_harness_zero_size_skips_trade():
+    """size=0 must skip even when open_signal=True."""
+    M = 10
+    close, high, low = _flat_path(120)
+    boundaries = _boundaries(10, M=M)
+    open_signal = np.zeros(10, dtype=bool)
+    open_signal[1] = True
+    size = np.zeros(10)
+    res = backtest.simulate_inventory_aware_sized(
+        boundaries, close, high, low, open_signal, size, M=M,
+    )
+    assert res.metrics["n_trades"] == 0
+
+
+def test_sized_harness_rejects_size_out_of_range():
+    boundaries = _boundaries(10, M=10)
+    close, high, low = _flat_path(120)
+    open_signal = np.array([True] + [False] * 9)
+    with pytest.raises(ValueError):
+        backtest.simulate_inventory_aware_sized(
+            boundaries, close, high, low, open_signal, np.full(10, 1.5),
+        )
+    with pytest.raises(ValueError):
+        backtest.simulate_inventory_aware_sized(
+            boundaries, close, high, low, open_signal, np.full(10, -0.1),
+        )
+
+
+def test_sized_harness_rejects_shape_mismatch():
+    boundaries = _boundaries(10, M=10)
+    close, high, low = _flat_path(120)
+    with pytest.raises(ValueError):
+        backtest.simulate_inventory_aware_sized(
+            boundaries, close, high, low,
+            open_signal=np.zeros(11, dtype=bool),
+            size=np.zeros(11),
+        )
+
+
+def test_sized_harness_inventory_cap_skips_overlap():
+    """Overlap rule preserved: a second open while in trade is skipped."""
+    M = 10
+    close, high, low = _flat_path(200)
+    boundaries = _boundaries(20, M=M)
+    open_signal = np.zeros(20, dtype=bool)
+    open_signal[1] = True
+    open_signal[2] = True
+    size = np.ones(20)
+    res = backtest.simulate_inventory_aware_sized(
+        boundaries, close, high, low, open_signal, size, M=M,
+    )
+    assert res.metrics["n_trades"] == 1
+
+
+def test_c_stop_inf_disables_stop_loss():
+    """c_stop=+inf ⇒ SL never triggers; trade exits via TP or timeout only."""
+    M = 10
+    base = 100.0
+    phi = 0.005
+
+    # Path: drops huge by minute 12 (would normally trigger SL at almost any
+    # finite c_stop), then no TP touch by end-of-window → timeout exit.
+    events = [
+        (0, base, base, base), (10, base, base, base),
+        (12, base * 0.5, base * 0.5, base * 0.5),  # 50% crash
+    ]
+    close, high, low = _scripted_path(events, n_minutes=200)
+    boundaries = _boundaries(20, M=M)
+    p = np.zeros(20)
+    p[1] = 0.99
+
+    # With finite c_stop the SL hits at min 11; with c_stop=inf SL is disabled.
+    res_fin = backtest.simulate_inventory_aware(
+        boundaries, close, high, low, p,
+        tau_open=0.5, M=M, phi=phi, c_stop=0.05, cost_bps=0.0,
+    )
+    res_inf = backtest.simulate_inventory_aware(
+        boundaries, close, high, low, p,
+        tau_open=0.5, M=M, phi=phi, c_stop=float("inf"), cost_bps=0.0,
+    )
+    assert res_fin.trades.iloc[0]["exit_reason"] == "sl"
+    assert res_inf.trades.iloc[0]["exit_reason"] in {"tp", "timeout"}
+
+
+def test_walk_forward_returns_n_folds_rows():
+    M = 10
+    close, high, low = _flat_path(2000)
+    boundaries = _boundaries(150, M=M)
+    open_signal = np.zeros(150, dtype=bool)
+    open_signal[::20] = True
+    df = backtest.walk_forward_backtest(
+        boundaries, close, high, low, open_signal, n_folds=5, M=M,
+    )
+    assert len(df) == 5
+    assert (df["fold"].to_numpy() == np.arange(5)).all()
+
+
+def test_walk_forward_per_fold_n_sums_to_total():
+    M = 10
+    close, high, low = _flat_path(1500)
+    boundaries = _boundaries(101, M=M)
+    open_signal = np.zeros(101, dtype=bool)
+    df = backtest.walk_forward_backtest(
+        boundaries, close, high, low, open_signal, n_folds=4, M=M,
+    )
+    assert df["n"].sum() == 101
+
+
+def test_walk_forward_rejects_too_few_boundaries():
+    M = 10
+    close, high, low = _flat_path(120)
+    boundaries = _boundaries(3, M=M)
+    open_signal = np.zeros(3, dtype=bool)
+    with pytest.raises(ValueError):
+        backtest.walk_forward_backtest(
+            boundaries, close, high, low, open_signal, n_folds=5, M=M,
+        )
+
+
+def test_walk_forward_default_size_unit_position():
+    """Calling without `size` should run unit-position folds."""
+    M = 10
+    close, high, low = _flat_path(2000)
+    boundaries = _boundaries(150, M=M)
+    open_signal = np.zeros(150, dtype=bool)
+    open_signal[5] = True  # one trade in fold 0
+    open_signal[55] = True  # one trade in fold 1
+    df = backtest.walk_forward_backtest(
+        boundaries, close, high, low, open_signal, n_folds=5, M=M, phi=0.005, c_stop=0.005,
+    )
+    # fold 0 + fold 1 should each have 1 trade (flat path → timeouts).
+    assert int(df.loc[0, "n_trades"]) == 1
+    assert int(df.loc[1, "n_trades"]) == 1
+    # Other folds zero.
+    assert int(df.loc[2:4, "n_trades"].sum()) == 0
+
+
+# -----------------------------------------------------------------------------
+# Phase A §A.5 — CSCV PBO
+# -----------------------------------------------------------------------------
+
+def test_cscv_pbo_pure_noise_yields_pbo_near_half():
+    """If all strategies are noise with the same distribution, PBO ≈ 0.5.
+
+    Wider tolerance reflects the genuine noise floor: with 10 strategies
+    and a finite chunk size, the IS-best is likely to under-perform OOS by
+    chance simply because the IS optimisation picked a noisy upper-tail.
+    The interesting test is that PBO sits comfortably above 0.3 (i.e., the
+    procedure does not silently report "no overfitting" on noise) and
+    below ~0.75 (i.e., it does not pin all weight to the noisiest fold).
+    """
+    rng = np.random.default_rng(0)
+    n_strats = 10
+    n_periods = 16 * 64  # 64 obs per chunk — cleaner Sharpe estimates.
+    R = rng.normal(0.0, 1.0, size=(n_strats, n_periods))
+    out = backtest.cscv_pbo(R, n_chunks=16)
+    assert 0.35 <= out["pbo"] <= 0.75, (
+        f"PBO under noise should sit in the [0.35, 0.75] noise band; got {out['pbo']}"
+    )
+
+
+def test_cscv_pbo_perfect_correlation_yields_pbo_zero():
+    """A clearly-best strategy that beats noise on every chunk → PBO ≈ 0."""
+    rng = np.random.default_rng(0)
+    n_strats = 10
+    n_periods = 16 * 32
+    R = rng.normal(0.0, 1.0, size=(n_strats, n_periods))
+    # Make strategy 0 dominantly better in every chunk.
+    R[0] += 3.0
+    out = backtest.cscv_pbo(R, n_chunks=16)
+    assert out["pbo"] < 0.05, f"PBO with a clear winner should be ~0; got {out['pbo']}"
+
+
+def test_cscv_pbo_rejects_invalid_args():
+    R = np.zeros((5, 100))
+    with pytest.raises(ValueError):
+        backtest.cscv_pbo(R, n_chunks=15)  # odd
+    with pytest.raises(ValueError):
+        backtest.cscv_pbo(R, n_chunks=200)  # too many chunks for n_periods
+    with pytest.raises(ValueError):
+        backtest.cscv_pbo(np.zeros((1, 100)))  # < 2 strategies
+    with pytest.raises(ValueError):
+        backtest.cscv_pbo(np.zeros(100))  # not 2D
+
+
+def test_cscv_pbo_returns_documented_keys():
+    rng = np.random.default_rng(1)
+    R = rng.normal(0.0, 1.0, size=(5, 16 * 16))
+    out = backtest.cscv_pbo(R, n_chunks=16)
+    for key in (
+        "pbo", "n_combinations", "n_chunks", "chunk_size", "n_strategies",
+        "median_logit", "mean_logit", "median_rel_rank",
+        "is_best_strategy_modal_index", "is_best_strategy_counts",
+    ):
+        assert key in out
+    assert out["n_strategies"] == 5
+    assert out["n_chunks"] == 16
+    # C(16, 8) = 12870
+    assert out["n_combinations"] == 12870
+
+
+def test_bootstrap_no_skill_pvalue_returns_dict():
+    """Smoke: bootstrap_no_skill_pvalue produces the documented schema."""
+    M = 10
+    rng = np.random.default_rng(0)
+    n_min = 5_000
+    sigma = 0.0008
+    log_ret = rng.normal(0.0, sigma, size=n_min)
+    log_close = 10.0 + np.cumsum(log_ret)
+    close = np.exp(log_close)
+    bar_range = np.abs(rng.normal(0.0, sigma, size=n_min))
+    high = close * (1.0 + bar_range)
+    low = close * (1.0 - bar_range)
+    boundaries = _boundaries(n_min // M, M=M)
+
+    out = backtest.bootstrap_no_skill_pvalue(
+        boundaries, close, high, low,
+        n_trades_observed=20, sharpe_observed=0.5,
+        M=M, phi=0.005, c_stop=0.005, cost_bps=0.0, n_bootstrap=8, seed=1,
+    )
+    for key in ("p_value", "null_sharpe_mean", "null_sharpe_std",
+                 "null_sharpe_q95", "n_bootstrap"):
+        assert key in out
+    assert 0.0 <= out["p_value"] <= 1.0
+    assert out["n_bootstrap"] == 8

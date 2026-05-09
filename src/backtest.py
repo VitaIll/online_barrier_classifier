@@ -350,6 +350,111 @@ def deflated_sharpe(
 
 
 # -----------------------------------------------------------------------------
+# CSCV — Combinatorially Symmetric Cross-Validation (López de Prado 2014)
+# -----------------------------------------------------------------------------
+
+def cscv_pbo(
+    returns_matrix: np.ndarray,
+    *,
+    n_chunks: int = 16,
+    eps: float = 1e-12,
+) -> dict:
+    """Backtest-overfit probability via Combinatorially Symmetric CV.
+
+    Implements López de Prado (2014) Ch. 11. The test partitions a
+    `(n_strategies × n_periods)` per-period return matrix into ``n_chunks``
+    equal contiguous slices, then evaluates every combination of ``n_chunks/2``
+    chunks as in-sample (IS) and the complement as out-of-sample (OOS):
+
+    - The IS-best strategy is the one with the highest IS Sharpe.
+    - That strategy's OOS Sharpe is ranked among all strategies' OOS Sharpes.
+    - Relative rank ω = (rank − 0.5) / n_strategies, logit λ = log(ω / (1 − ω)).
+    - PBO = fraction of combinations with λ < 0 — i.e., the IS-best strategy
+      ranked below the OOS median.
+
+    PBO > 0.5 means the IS-best strategy generalises worse than median; the
+    optimisation is overfit. PBO < 0.5 means the IS-best generalises better
+    than median; the optimisation has signal.
+
+    Parameters
+    ----------
+    returns_matrix : (n_strategies, n_periods) np.ndarray
+        Per-period returns. ``n_periods`` should be evenly divisible by
+        ``n_chunks`` (excess columns at the right are dropped).
+    n_chunks : int, default 16
+        Must be even. C(n_chunks, n_chunks//2) combinations are evaluated
+        — for n_chunks=16 that's 12,870 combinations.
+    eps : float
+        Lower clip for ω before taking the logit, to keep λ finite.
+    """
+    R = np.asarray(returns_matrix, dtype=float)
+    if R.ndim != 2:
+        raise ValueError(f"returns_matrix must be 2D; got {R.ndim}D")
+    n_strats, n_periods = R.shape
+    if n_strats < 2:
+        raise ValueError(f"need >= 2 strategies; got {n_strats}")
+    if n_chunks < 2 or n_chunks % 2 != 0:
+        raise ValueError(f"n_chunks must be a positive even number; got {n_chunks}")
+    chunk_size = n_periods // n_chunks
+    if chunk_size < 1:
+        raise ValueError(
+            f"n_periods ({n_periods}) too small for n_chunks ({n_chunks})"
+        )
+    n_total = chunk_size * n_chunks
+    R = R[:, :n_total]
+    R_chunks = R.reshape(n_strats, n_chunks, chunk_size)
+
+    from itertools import combinations
+
+    half = n_chunks // 2
+    logits: list[float] = []
+    rel_ranks: list[float] = []
+    is_best_strategy_counts = np.zeros(n_strats, dtype=int)
+
+    for IS_idx in combinations(range(n_chunks), half):
+        IS_set = set(IS_idx)
+        OOS_idx = tuple(c for c in range(n_chunks) if c not in IS_set)
+
+        IS_flat = R_chunks[:, IS_idx, :].reshape(n_strats, -1)
+        OOS_flat = R_chunks[:, OOS_idx, :].reshape(n_strats, -1)
+
+        IS_mean = IS_flat.mean(axis=1)
+        IS_std = IS_flat.std(axis=1, ddof=1)
+        OOS_mean = OOS_flat.mean(axis=1)
+        OOS_std = OOS_flat.std(axis=1, ddof=1)
+
+        IS_sharpe = IS_mean / np.maximum(IS_std, eps)
+        OOS_sharpe = OOS_mean / np.maximum(OOS_std, eps)
+
+        best = int(np.argmax(IS_sharpe))
+        is_best_strategy_counts[best] += 1
+        # Rank: 1=worst, n_strats=best.
+        rank = int((OOS_sharpe < OOS_sharpe[best]).sum()) + 1
+        omega = (rank - 0.5) / n_strats
+        omega_clip = float(np.clip(omega, eps, 1.0 - eps))
+        logits.append(float(np.log(omega_clip / (1.0 - omega_clip))))
+        rel_ranks.append(omega)
+
+    logits_arr = np.asarray(logits, dtype=float)
+    rel_ranks_arr = np.asarray(rel_ranks, dtype=float)
+    pbo = float((logits_arr < 0).mean())
+    return {
+        "pbo": pbo,
+        "n_combinations": int(len(logits)),
+        "n_chunks": int(n_chunks),
+        "chunk_size": int(chunk_size),
+        "n_strategies": int(n_strats),
+        "median_logit": float(np.median(logits_arr)),
+        "mean_logit": float(np.mean(logits_arr)),
+        "median_rel_rank": float(np.median(rel_ranks_arr)),
+        "is_best_strategy_modal_index": int(is_best_strategy_counts.argmax()),
+        "is_best_strategy_counts": is_best_strategy_counts.tolist(),
+        "logits": logits_arr,
+        "rel_ranks": rel_ranks_arr,
+    }
+
+
+# -----------------------------------------------------------------------------
 # Diagnostic plots (visual-first reporting per CONSTITUTION V)
 # -----------------------------------------------------------------------------
 
@@ -444,6 +549,247 @@ def plot_backtest(result: BacktestResult, out_path) -> None:
     fig.savefig(out_path, dpi=160, facecolor="white", bbox_inches="tight")
     import matplotlib.pyplot as _plt
     _plt.close(fig)
+
+
+# -----------------------------------------------------------------------------
+# Sized harness (Phase A §A.3 — cost still applies on full position,
+#                                PnL scales with size)
+# -----------------------------------------------------------------------------
+
+def simulate_inventory_aware_sized(
+    boundaries: pd.DataFrame,
+    minute_close: np.ndarray,
+    minute_high: np.ndarray,
+    minute_low: np.ndarray,
+    open_signal: np.ndarray,
+    size: np.ndarray,
+    *,
+    M: int = 10,
+    phi: float = 0.0025,
+    c_stop: float = 0.0023,
+    cost_bps: float = 0.0,
+    p_signal: Optional[np.ndarray] = None,
+) -> BacktestResult:
+    """Sized variant of `simulate_inventory_aware`.
+
+    Per MANDATE §A.3: ``size`` scales realised gross log-PnL but the
+    round-trip transaction cost is still charged in full (conservative
+    cost model that penalises sizing-down). Inventory cap, first-touch
+    rule, pessimistic same-bar tie-break, and timeout semantics are
+    identical to the unit-position simulator.
+
+    Parameters
+    ----------
+    open_signal : (n,) bool — whether the strategy fires at boundary k.
+    size        : (n,) float in [0, 1] — fraction of unit position taken.
+    p_signal    : optional (n,) float — strategy "confidence" recorded on
+                   the trade row for diagnostics. Defaults to size.
+
+    `c_stop=float("inf")` disables the SL barrier (`exp(-inf) = 0` ⇒ SL
+    price = 0 ⇒ never triggered on positive prices). Tested explicitly.
+    """
+    n_boundaries = len(boundaries)
+    open_signal = np.asarray(open_signal).astype(bool)
+    size = np.asarray(size, dtype=float)
+    if open_signal.shape != (n_boundaries,):
+        raise ValueError(
+            f"open_signal shape {open_signal.shape} != boundaries length {n_boundaries}"
+        )
+    if size.shape != open_signal.shape:
+        raise ValueError(
+            f"size shape {size.shape} != open_signal shape {open_signal.shape}"
+        )
+    if not np.all((size >= 0.0) & (size <= 1.0)):
+        raise ValueError("size must lie in [0, 1] elementwise.")
+    M = int(M)
+
+    if p_signal is None:
+        p_signal = size
+    else:
+        p_signal = np.asarray(p_signal, dtype=float)
+        if p_signal.shape != open_signal.shape:
+            raise ValueError(
+                f"p_signal shape {p_signal.shape} != open_signal shape {open_signal.shape}"
+            )
+
+    trades: list[Trade] = []
+    cooldown_until_n = -1
+
+    for k in range(n_boundaries):
+        if not open_signal[k]:
+            continue
+        if size[k] <= 0.0:
+            continue
+        n_k = int(boundaries["k"].iat[k]) * M
+        if n_k <= cooldown_until_n:
+            continue
+        if n_k + M >= len(minute_close):
+            break
+
+        entry_price = float(minute_close[n_k])
+        if not math.isfinite(entry_price) or entry_price <= 0:
+            continue
+        tp_price = entry_price * math.exp(phi)
+        # Use math.exp(-c_stop) so c_stop = +inf cleanly produces sl_price = 0
+        # (which, against positive prices, never triggers).
+        sl_price = entry_price * math.exp(-c_stop) if math.isfinite(c_stop) else 0.0
+
+        future_high = minute_high[n_k + 1 : n_k + 1 + M]
+        future_low = minute_low[n_k + 1 : n_k + 1 + M]
+
+        sl_hits = future_low <= sl_price
+        tp_hits = future_high >= tp_price
+        sl_first = int(np.argmax(sl_hits)) if sl_hits.any() else M
+        tp_first = int(np.argmax(tp_hits)) if tp_hits.any() else M
+
+        if sl_first <= tp_first and sl_first < M:
+            exit_reason: ExitReason = "sl"
+            exit_idx = n_k + 1 + sl_first
+            exit_price = sl_price
+        elif tp_first < sl_first:
+            exit_reason = "tp"
+            exit_idx = n_k + 1 + tp_first
+            exit_price = tp_price
+        else:
+            exit_reason = "timeout"
+            exit_idx = n_k + M
+            exit_price = float(minute_close[exit_idx])
+
+        pnl_log_gross = float(math.log(exit_price / entry_price)) * float(size[k])
+        # Cost on full unit position regardless of size (mandate spec).
+        pnl_log_net = pnl_log_gross - 2.0 * cost_bps * 1e-4
+
+        k_close = (exit_idx + M - 1) // M
+        if k_close <= k:
+            k_close = k + 1
+        if k_close >= n_boundaries:
+            k_close = n_boundaries - 1
+
+        trades.append(
+            Trade(
+                k_open=int(k),
+                k_close=int(k_close),
+                n_open=int(n_k),
+                n_close=int(exit_idx),
+                entry_price=entry_price,
+                exit_price=float(exit_price),
+                exit_reason=exit_reason,
+                pnl_log_gross=float(math.log(exit_price / entry_price)),
+                pnl_log_net=pnl_log_net,
+                p_signal=float(p_signal[k]),
+                bars_held=int(exit_idx - n_k),
+            )
+        )
+        cooldown_until_n = int(exit_idx)
+
+    trade_df = (
+        pd.DataFrame([asdict(t) for t in trades])
+        if trades
+        else pd.DataFrame(
+            columns=[
+                "k_open", "k_close", "n_open", "n_close", "entry_price",
+                "exit_price", "exit_reason", "pnl_log_gross", "pnl_log_net",
+                "p_signal", "bars_held",
+            ]
+        )
+    )
+
+    equity_log = np.zeros(n_boundaries, dtype=float)
+    for t in trades:
+        equity_log[t.k_close:] += t.pnl_log_net
+    equity = pd.Series(equity_log, index=boundaries["k"].to_numpy(), name="equity_log")
+
+    metrics = compute_backtest_metrics(trade_df, equity, M=M)
+    config = {
+        "M": int(M),
+        "phi": float(phi),
+        "c_stop": float(c_stop),
+        "cost_bps": float(cost_bps),
+        "n_boundaries": int(n_boundaries),
+        "sized": True,
+    }
+    return BacktestResult(trades=trade_df, equity=equity, metrics=metrics, config=config)
+
+
+# -----------------------------------------------------------------------------
+# Walk-forward (Phase A §A.3 — N folds with per-fold metrics)
+# -----------------------------------------------------------------------------
+
+def walk_forward_backtest(
+    boundaries: pd.DataFrame,
+    minute_close: np.ndarray,
+    minute_high: np.ndarray,
+    minute_low: np.ndarray,
+    open_signal: np.ndarray,
+    size: Optional[np.ndarray] = None,
+    *,
+    n_folds: int = 5,
+    M: int = 10,
+    phi: float = 0.0025,
+    c_stop: float = 0.0023,
+    cost_bps: float = 0.0,
+) -> pd.DataFrame:
+    """Run the harness on `n_folds` contiguous chronological folds.
+
+    Each fold contains a contiguous slice of `boundaries`/`open_signal`/`size`
+    plus the corresponding minute-bar window. Returns a DataFrame with
+    columns `[fold, k_start, k_end, n, n_trades, sharpe, psr,
+    total_log_return, max_drawdown_log, hit_rate]`. Use
+    ``df["sharpe"].mean()`` ± ``df["sharpe"].std()`` for the across-fold
+    summary.
+
+    The signal vector is treated as already prequential (built up by
+    `predict()` over the full test slice); slicing into folds reports
+    Sharpe stability without re-warming q-state per fold.
+    """
+    n_b = len(boundaries)
+    if n_folds < 1:
+        raise ValueError(f"n_folds must be >= 1, got {n_folds}")
+    if n_b < n_folds:
+        raise ValueError(f"need n_boundaries ({n_b}) >= n_folds ({n_folds})")
+    open_signal = np.asarray(open_signal).astype(bool)
+    if size is None:
+        size = np.ones(n_b, dtype=float)
+    size = np.asarray(size, dtype=float)
+    if open_signal.shape != (n_b,) or size.shape != (n_b,):
+        raise ValueError(
+            f"open_signal/size shape mismatch with boundaries: "
+            f"{open_signal.shape}/{size.shape} vs ({n_b},)"
+        )
+
+    fold_size = n_b // n_folds
+    rows = []
+    for f in range(n_folds):
+        k_lo = f * fold_size
+        k_hi = (f + 1) * fold_size if f < n_folds - 1 else n_b
+
+        sub_bound = boundaries.iloc[k_lo:k_hi].reset_index(drop=True)
+        sub_signal = open_signal[k_lo:k_hi]
+        sub_size = size[k_lo:k_hi]
+
+        # The minute window for the fold is bounded by the first and last k in
+        # `sub_bound`. We pass the FULL minute arrays and let the harness use
+        # the boundary mapping (k_in_subframe * M still indexes minute_close
+        # correctly because boundaries["k"] carries the original minute k).
+        res = simulate_inventory_aware_sized(
+            sub_bound, minute_close, minute_high, minute_low,
+            sub_signal, sub_size,
+            M=M, phi=phi, c_stop=c_stop, cost_bps=cost_bps,
+        )
+        m = res.metrics
+        rows.append({
+            "fold": int(f),
+            "k_start": int(boundaries["k"].iat[k_lo]),
+            "k_end": int(boundaries["k"].iat[k_hi - 1]),
+            "n": int(k_hi - k_lo),
+            "n_trades": int(m["n_trades"]),
+            "sharpe": float(m["sharpe"]),
+            "psr": float(m["probabilistic_sharpe"]),
+            "total_log_return": float(m["total_log_return"]),
+            "max_drawdown_log": float(m["max_drawdown_log"]),
+            "hit_rate": float(m["hit_rate"]),
+        })
+    return pd.DataFrame(rows)
 
 
 # -----------------------------------------------------------------------------
