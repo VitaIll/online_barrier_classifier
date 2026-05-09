@@ -17,3 +17,6 @@ __pycache__/
 # Round-local in-progress files
 RESEARCH/HYPOTHESIS.md.draft
 RESEARCH/.loop_heartbeat.json
+
+# Claude Code runtime locks/state (per-session, not source)
+.claude/scheduled_tasks.lock
