@@ -59,12 +59,28 @@ Top of file = highest priority.
 - **Status**: ACCEPTED round-001 — finite metrics confirmed on real stream; p_offline τ=0.30 Sharpe=+1.50 PSR=0.995 with bootstrap p<0.001 vs shuffled-signal null. Online layer (p_final=p_online) does NOT add Sharpe at any τ tested — consistent with CONSTITUTION I (online optimizes coverage not ranking). Spawned H-005b + H-005c.
 - **Cost**: 30 min (actual: ~7 min wall-clock)
 
+### H-024 [P5] (spawned by round 009) Strategy/backtest re-evaluation post-H-005b
+- **Owner**: THEORIST + IMPLEMENTER
+- **Asks**: ask 4 (alpha discovery)
+- **Mechanism**: round-009 showed that under the current label (`max excursion ≥ α`) + triple-barrier backtest (φ=c_stop=α, cost 1bp/side), the validation-chosen τ produces test Sharpe ≈ 0. Two label/strategy variations are worth measuring on the same harness: (a) **no-stop backtest** (`c_stop`=∞ or large) — matches the implicit "open long, take profit at +α, exit at close otherwise" strategy of the current upper-barrier label; this is the most direct fix to the label/backtest mismatch we surfaced earlier in conversation; (b) **first-touch label retraining** (LdP triple-barrier label `1[upper hit before lower]`) — full alignment of label and backtest, but invalidates accumulated positives. Run (a) first because cheap (no retrain): just re-run round 009 with `c_stop=10*α`, see whether the val-chosen τ now produces real test Sharpe.
+- **Falsification**: under (a), val-chosen τ produces test Sharpe > 0.5 with p_boot < 0.05 → label/backtest mismatch was the binding constraint. Otherwise the model genuinely has no edge at this horizon.
+- **Status**: queued
+- **Cost**: low (re-run round 009 with one parameter change)
+
+### H-025 [P4] (spawned by round 009) Sized entries via Mondrian-ACI confidence
+- **Owner**: IMPLEMENTER
+- **Asks**: ask 4 + ask 6 — using the conformal layer to drive economic decisions
+- **Mechanism**: Mondrian-ACI (round 008) gives a per-regime adaptive q_t — effectively a per-regime confidence bar. Open long when p ≥ q_t (i.e., when the prediction set is the singleton {1}); size proportional to a measure of confidence (e.g., `max(0, p - q_t)` truncated). Test on the validation window, pick a sizing rule, evaluate on test. The hypothesis is that the binary p ≥ τ rule is throwing away information that q_t has already extracted.
+- **Falsification**: sized variant beats binary at val-chosen-rule (under the same tau* → q_t mapping) by Sharpe > 0.3 on test, with p_boot < 0.10.
+- **Status**: queued (depends on round 009 H-024 to first establish whether ANY binary edge exists; if H-024 says no, sizing is a tax on noise).
+- **Cost**: medium
+
 ### H-005b [P5] (spawned by round 001) Validation-split τ_open selection for the H-005 sweep
 - **Owner**: IMPLEMENTER
 - **Asks**: ask 4 (rigorous evaluation per CONSTITUTION V.b)
-- **Mechanism**: round 001 picked τ_open as a post-hoc grid because the existing `artifacts/online_eval/` only persists test predictions. Re-run `notebooks/offline_train.ipynb` + `notebooks/online_eval.ipynb` to additionally persist a `predictions_val.parquet` (the chronological val window that was already used for early-stopping). Sweep τ_open on val Sharpe + PR-AUC, pick winner per CONSTITUTION V.b, then evaluate at fixed τ on test. Tag `backtest` (30-min budget). Compare round-001's post-hoc τ=0.30 to the val-chosen τ — if they coincide, the round-001 result holds; if they diverge, the round-001 numbers are demoted to "exploratory only" in REPORT_LATEST.
+- **Mechanism**: round 001 picked τ_open as a post-hoc grid because the existing `artifacts/online_eval/` only persists test predictions. Re-run `notebooks/offline_train.ipynb` + `notebooks/online_eval.ipynb` to additionally persist a `predictions_val.parquet` (the chronological val window that was already used for early-stopping). Sweep τ_open on val Sharpe + PR-AUC, pick winner per CONSTITUTION V.b, then evaluate at fixed τ on test. Tag `backtest` (30-min budget). Compare round-001's post-hoc τ=0.30 to the val-chosen τ — if they coincide, the round-001 result holds; if they diverge, the round-001 numbers are demoted to "exploratory only" in REPORT.
 - **Falsification**: val-chosen τ for p_offline lands inside the round-001 post-hoc grid {0.10..0.50}; if the val-Sharpe-grid optimum is outside this range, the round-001 sweep was insufficiently wide.
-- **Status**: queued (depends on a notebook re-run, not on a model retrain)
+- **Status**: ACCEPTED round-009 — val tau\* = 0.44 (inside the round-001 grid {0.10..0.50}, falsifier-1 PASSES). Test Sharpe at val-chosen tau\* = -0.089 (PSR=0.458, p_boot=0.000 vs shuffled-signal null, DSR=0.000 after 26-tau-grid deflation). Round-001's PSR=0.995 at τ=0.30 demoted to "exploratory only" in REPORT.md headline. Strategy still beats random-entry-at-same-rate (model has SOME information) but does not produce tradable alpha after honest selection. Also: built `scripts/build_report.py` and `RESEARCH/REPORT.md` (canonical living dashboard, trading section leads, regenerates from per-round headline.json each round).
 - **Cost**: medium (notebook surgery + 1 retrain)
 
 ### H-005c [P3] (spawned by round 001) CSCV PBO deflation of the H-005 τ sweep
@@ -83,6 +99,7 @@ Top of file = highest priority.
 6. ~~**H-107**~~ — ACCEPTED round-006. Plot helpers in `src/plotting.py`; weight plots deferred to H-102.
 7. ~~**H-202**~~ — ACCEPTED round-007. ACI in `src/conformal.py`; marginal coverage hits target within 1.5σ on real stream; per-regime gap motivates H-203.
 8. ~~**H-203**~~ — ACCEPTED round-008. Mondrian-ACI collapses per-regime gap to ≤ 0.6pp on every (regime, α, predictor); beats batch Mondrian-LAC and closes the α=0.20 low-vol p_online gap (-7.9pp → +0.04pp).
+9. ~~**H-005b**~~ — ACCEPTED round-009. Val-chosen tau* = 0.44 → test Sharpe -0.089. Round-001's PSR=0.995 was a post-hoc artifact. Plus: canonical living REPORT.md scaffolding (trading section leads).
 5. **H-106** — regime-stratified calibration helpers (primary metric per CONSTITUTION IV).
 6. **H-107** — plot helpers + threshold-analysis CSV (visual-first reporting parity with sibling).
 7. **H-202** — Adaptive Conformal Inference on offline output.

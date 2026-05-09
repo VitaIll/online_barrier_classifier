@@ -95,7 +95,7 @@ Reset working tree if needed (`git checkout -- .`) so master stays clean.
 
 1. Append one line to `LEDGER.md` (pipe-separated, no prose).
 2. Update `BACKLOG.md`: status of the picked item; add any new hypotheses spawned.
-3. Regenerate `REPORT_LATEST.md`: status, last 5 LEDGER lines, top 5 BACKLOG.
+3. Regenerate the canonical dashboard: `python scripts/build_report.py` (writes `RESEARCH/REPORT.md` from per-round `headline.json` artifacts; idempotent; trading section always leads).
 
 ## Phase 7 — Compact (always run, idempotent, ~1s)
 

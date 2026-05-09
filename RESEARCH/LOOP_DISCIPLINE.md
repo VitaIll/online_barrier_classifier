@@ -30,8 +30,11 @@ Each round MUST follow this five-step structure. Skipping a step → drift.
    runs `python scripts/critic_check.py --json` before commit.
 
 4. **Update memory.** Append one row to `LEDGER.md`. Update `BACKLOG.md`
-   status of the picked item; add new hypotheses spawned. Regenerate
-   `REPORT_LATEST.md`. If a hypothesis dies, append to `KILL_LIST.md`.
+   status of the picked item; add new hypotheses spawned. Re-render the
+   canonical dashboard with `python scripts/build_report.py` — it pulls
+   from every round's `RESEARCH/diagrams/round_NNN/headline.json` and
+   writes a single living `RESEARCH/REPORT.md` (trading section always
+   leads). If a hypothesis dies, append to `KILL_LIST.md`.
 
 5. **Report concise status.** One short paragraph to the user: what was
    done, what was learned, what's next. No waffle, no headers, no emoji.
