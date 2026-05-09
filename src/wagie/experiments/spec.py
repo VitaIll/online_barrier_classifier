@@ -53,6 +53,33 @@ class ArtifactsSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class CVSpec(BaseModel):
+    """Cross-validation knobs. When present, the protocol runs CV instead of
+    a single backtest. CV folds use `wagie.cv.cross_validation`."""
+
+    enabled: bool = True
+    n_folds: int = 10
+    n_test_folds: int = 2
+    purged_size: int = 1
+    embargo_size: int = 5
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class TrainingSpec(BaseModel):
+    """Training-side knobs the protocol applies before the engine runs.
+
+    Currently: warm the streaming Mondrian-ACI quantiles from a held-out
+    train slice. Offline CatBoost training is out-of-band — point
+    `wagie.model.catboost_path` at a pre-trained .cbm.
+    """
+
+    warm_calibrator_quantiles: bool = False
+    warm_train_frac: float = 0.6
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class ExperimentSpec(BaseModel):
     """The single source of truth for one experiment.
 
@@ -71,12 +98,11 @@ class ExperimentSpec(BaseModel):
     wagie: WagieConfig
 
     features: FeaturesSpec = Field(default_factory=FeaturesSpec)
+    training: TrainingSpec = Field(default_factory=TrainingSpec)
+    cv: Optional[CVSpec] = None
     charts: ChartsSpec = Field(default_factory=ChartsSpec)
     report: ReportSpec = Field(default_factory=ReportSpec)
     artifacts: ArtifactsSpec = Field(default_factory=ArtifactsSpec)
-
-    # CV (when running the cv mode of the protocol; ignored in run mode)
-    cv_enabled: bool = False
 
     model_config = ConfigDict(extra="forbid")
 
@@ -97,4 +123,4 @@ class ExperimentSpec(BaseModel):
 
 
 __all__ = ["ExperimentSpec", "FeaturesSpec", "ChartsSpec",
-           "ReportSpec", "ArtifactsSpec"]
+           "ReportSpec", "ArtifactsSpec", "CVSpec", "TrainingSpec"]

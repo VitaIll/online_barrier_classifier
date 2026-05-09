@@ -70,14 +70,20 @@ def _cmd_experiment_show(args) -> int:
 
 
 def _cmd_cv(args) -> int:
-    from wagie.cv import cross_validation
-    from wagie.experiments import ExperimentSpec
+    """Force-run a spec in CV mode regardless of its `cv:` block."""
+    from wagie.experiments import CVSpec, ExperimentProtocol, ExperimentSpec
     spec = ExperimentSpec.from_yaml(args.spec)
-    result = cross_validation(
-        spec.wagie, n_folds=args.n_folds, n_test_folds=args.n_test_folds,
+    spec.cv = CVSpec(
+        enabled=True,
+        n_folds=args.n_folds,
+        n_test_folds=args.n_test_folds,
         embargo_size=args.embargo,
     )
-    print(result.summary())
+    result = ExperimentProtocol().run(spec, spec_path=Path(args.spec))
+    print(result.headline)
+    print(f"out_dir: {result.out_dir}")
+    if result.report_path:
+        print(f"report: {result.report_path}")
     return 0
 
 

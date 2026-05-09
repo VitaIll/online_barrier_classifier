@@ -29,6 +29,12 @@ test:
 test-fast:
 	$(PYTHON) -m pytest -q tests/contracts/
 
+cov:
+	$(PYTHON) -m pytest -q tests/ --cov=wagie --cov-report=term-missing:skip-covered --cov-branch
+
+cov-html:
+	$(PYTHON) -m pytest -q tests/ --cov=wagie --cov-report=html --cov-branch
+
 lint:
 	$(PYTHON) -m ruff check src/ tests/ || true
 	$(PYTHON) -m black --check src/ tests/ || true

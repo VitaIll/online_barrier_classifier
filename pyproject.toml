@@ -55,6 +55,7 @@ dev = [
     "pytest-freezer>=0.4",
     "ruff>=0.6",
     "black>=24.0",
+    "coverage>=7.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -77,6 +78,29 @@ markers = [
     "smoke: test runs in <1s; gates every commit",
     "gating: test gates every PR (~5min budget)",
     "nightly: test runs on cron only",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src/wagie"]
+omit = [
+    "src/wagie/__main__.py",
+    "src/wagie/io/sources.py",
+    "src/wagie/features/bounded_batch.py",
+    "src/wagie/pipeline/catboost_predictor.py",
+]
+
+[tool.coverage.report]
+precision = 1
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "raise NotImplementedError",
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "@(abc\\.)?abstractmethod",
+    "if TYPE_CHECKING:",
+    "\\.\\.\\.",
 ]
 
 [tool.ruff]

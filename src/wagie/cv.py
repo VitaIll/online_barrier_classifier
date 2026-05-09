@@ -86,10 +86,19 @@ def cross_validation(
     X = np.arange(n).reshape(-1, 1)
 
     for fold_id, (train_idx, test_idx) in enumerate(cv.split(X)):
-        if len(test_idx) == 0:
+        # skfolio's CombinatorialPurgedCV yields a flat ndarray when
+        # n_test_folds==1 and a list-of-ndarrays when n_test_folds>=2;
+        # normalise to a flat 1-D array.
+        if isinstance(test_idx, (list, tuple)):
+            if not test_idx:
+                continue
+            flat = np.concatenate([np.asarray(idx).ravel() for idx in test_idx])
+        else:
+            flat = np.asarray(test_idx).ravel()
+        if flat.size == 0:
             continue
-        test_start = int(test_idx.min()) * cfg.data.m_minutes
-        test_end = int(test_idx.max() + 1) * cfg.data.m_minutes
+        test_start = int(flat.min()) * cfg.data.m_minutes
+        test_end = int(flat.max() + 1) * cfg.data.m_minutes
         # Convert decision-bar indices to ms timestamps
         df_sorted = df.sort("open_time")
         test_open_time_ms = int(df_sorted["open_time"][test_start])
