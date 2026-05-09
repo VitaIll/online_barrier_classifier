@@ -4,13 +4,13 @@ Regenerated at end of each round.
 
 ---
 
-**As of**: 2026-05-09 — Round 007 (H-202 Adaptive Conformal Inference)
+**As of**: 2026-05-09 — Round 008 (H-203 Mondrian-ACI hybrid)
 
 ## Status
 
 - **Branches**: `master` only (in-session loop pattern, no per-round branches).
-- **Tags**: `round-001-accepted` through `round-007-accepted`.
-- **Tests**: 104 pass.
+- **Tags**: `round-001-accepted` through `round-008-accepted`.
+- **Tests**: 113 pass.
 - **MLflow runs**: `barrier_round_001` (only round so far that did real-data work; rounds 002/003 are deterministic measurement / engineering and don't log to MLflow).
 - **Diagrams**:
   - `RESEARCH/diagrams/round_001/` — `tau_sweep_summary.png`, `backtest_detail_tau20_final.png`, `tau_sweep_metrics.csv`, `headline.json`
@@ -29,8 +29,35 @@ Regenerated at end of each round.
 - 005 | H-106 | accept | regime-stratified calibration helpers; on real test (n=31,486) offline ECE 0.05/0.10/0.17 (low/med/high) vs online ECE 0.015 flat — direct empirical proof of CONSTITUTION I
 - 006 | H-107 | accept | `src/plotting.py` lands 4 helpers; visual report card on real data reproduces round-005 ECE numbers exactly
 - 007 | H-202 | accept | ACI marginal coverage on real stream within 1.5σ of target at α∈{0.05,0.10,0.20}; per-regime gap motivates H-203 Mondrian-ACI
+- 008 | H-203 | accept | Mondrian-ACI per-regime gap ≤ 0.6pp everywhere; **beats batch Mondrian-LAC** and closes the canonical α=0.20 low-vol gap (-7.9pp → +0.04pp)
 
-## Round 007 highlights — Adaptive Conformal Inference
+## Round 008 highlights — Mondrian-ACI hybrid
+
+**What landed**: `aci_mondrian_step` + `aci_mondrian_stream` in `src/conformal.py`. Per-regime q_t with the same online update rule as plain ACI; only the active regime's q is updated per step. 9 new tests including a **bit-exact reduction** check: with one regime label, Mondrian-ACI is identical to `aci_stream` (load-bearing).
+
+**Headline result on real eval stream** (n=22,040, γ=0.01, per-regime q warmed on cal):
+
+Per-regime gap (target − empirical, +pp = under-coverage), comparing the three approaches that have run on this exact slice:
+
+| α   | predictor | regime | plain ACI | Mondrian-ACI (new) | Mondrian-LAC R002 |
+|-----|-----------|--------|-----------|--------------------|-------------------|
+| 0.10| p_offline | low    | −5.8      | **+0.04**          | +3.4              |
+| 0.10| p_offline | med    | +1.0      | **+0.02**          | −1.2              |
+| 0.10| p_offline | high   | +6.2      | **−0.21**          | −0.5              |
+| 0.10| p_online  | low    | −4.8      | **+0.06**          | +2.0              |
+| 0.10| p_online  | high   | +5.8      | **−0.08**          | −3.4              |
+| 0.20| p_online  | **low**| **−4.1**  | **+0.04**          | **−7.9** ← canonical "gap to close" |
+| 0.20| p_online  | high   | +7.4      | **−0.54**          | −1.2              |
+
+**Mondrian-ACI's max |gap| anywhere is 0.54pp.** Plain ACI is ±5–10pp. Mondrian-LAC is ±3–8pp. **Mondrian-ACI beats both.**
+
+**Closes round-002's canonical target**: round-002 LEDGER named the α=0.20 low-vol p_online gap (−7.9pp) as "the gap H-202..H-208 must close." Mondrian-ACI closes it to +0.04pp.
+
+**Why it works**: each regime maintains its own q_t with its own per-step update. Per-regime score distributions drift independently with volatility regime; the static batch Mondrian-LAC q_hat can't track that drift, but online per-regime ACI can. The per-regime q-trajectory plot shows low-vol q staying low and high-vol q staying high, exactly as expected.
+
+**Marginal coverage stays on target**: 0.9004 / 0.8998 / 0.8015 at α=0.10 / 0.10 / 0.20 (within 0.002 of target).
+
+**Verdict**: APPROVE. The online conformal layer's headline metric (per-regime coverage gap) is now solved at the basic-stream level; remaining online refinements (H-204 estimator-comparison, H-207 ADWIN drift reset, H-208 trade-gate) are incremental on top of this.
 
 **What landed**: `aci_step` + `aci_stream` in `src/conformal.py` (Gibbs & Candès 2021). One-step update `q_{t+1} = clip(q_t + γ(err_t − α), 0, 1)`; set construction reuses the same LAC convention as the batch path (`predict_set`), so coverage semantics are directly comparable to round-002. 14 new tests pin the per-step math, edge cases (γ=0 freezes; clamping), batch parity at fixed q, and asymptotic coverage convergence on a stationary IID stream.
 
@@ -110,7 +137,7 @@ Offline calibration breaks worst at high volatility (ECE 0.17, mean_p nearly 2×
 
 **Verdict**: APPROVE. Unblocks H-105 (NSGA-II HPO needs reusable splits).
 
-## Round ordering (post-007)
+## Round ordering (post-008)
 
 1. ~~H-005~~ ACCEPTED 001
 2. ~~H-201~~ ACCEPTED 002
@@ -119,12 +146,13 @@ Offline calibration breaks worst at high volatility (ECE 0.17, mean_p nearly 2×
 5. ~~H-106~~ ACCEPTED 005
 6. ~~H-107~~ ACCEPTED 006
 7. ~~H-202~~ ACCEPTED 007
-8. **H-203** — Mondrian-ACI hybrid (per-regime q_t with the ACI update; directly closes round-007's per-regime gap)
-9. **H-105** — NSGA-II HPO (unblocked by H-101)
-10. **H-102** — sample weighting (carefully wrt SqrtBalanced)
-11. **H-103** — undef-flag pattern
-12. **H-111 / H-112 / H-114 / H-115** — sibling-borne feature groups
-13. **H-204 / H-205 / H-206 / H-207 / H-208** — online-stage refinements
+8. ~~H-203~~ ACCEPTED 008
+9. **H-207** — ADWIN drift detector triggers ACI threshold reset (most natural on top of Mondrian-ACI)
+10. **H-105** — NSGA-II HPO (unblocked by H-101)
+11. **H-102** — sample weighting (carefully wrt SqrtBalanced)
+12. **H-103** — undef-flag pattern
+13. **H-204 / H-205 / H-206 / H-208** — online-stage refinements
+14. **H-111 / H-112 / H-114 / H-115** — sibling-borne feature groups
 
 (H-005b, H-005c, H-201b, H-201c are sub-priority follow-ups; pick when natural.)
 

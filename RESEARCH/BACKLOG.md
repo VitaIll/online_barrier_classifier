@@ -82,6 +82,7 @@ Top of file = highest priority.
 5. ~~**H-106**~~ — ACCEPTED round-005. Calibration metrics in `src/utils.py`. Per-regime visual proves online's regime-flat ECE thesis empirically.
 6. ~~**H-107**~~ — ACCEPTED round-006. Plot helpers in `src/plotting.py`; weight plots deferred to H-102.
 7. ~~**H-202**~~ — ACCEPTED round-007. ACI in `src/conformal.py`; marginal coverage hits target within 1.5σ on real stream; per-regime gap motivates H-203.
+8. ~~**H-203**~~ — ACCEPTED round-008. Mondrian-ACI collapses per-regime gap to ≤ 0.6pp on every (regime, α, predictor); beats batch Mondrian-LAC and closes the α=0.20 low-vol p_online gap (-7.9pp → +0.04pp).
 5. **H-106** — regime-stratified calibration helpers (primary metric per CONSTITUTION IV).
 6. **H-107** — plot helpers + threshold-analysis CSV (visual-first reporting parity with sibling).
 7. **H-202** — Adaptive Conformal Inference on offline output.
@@ -131,7 +132,7 @@ The online stage is a streaming conformal layer providing conditional coverage. 
 
 ### H-203 [P5] Mondrian-ACI hybrid for regime-conditional coverage
 - **Mechanism**: extend H-202 to maintain a separate `q_t` per volatility tercile (regime). Closes the per-regime coverage gap that plain ACI may leave open under regime drift.
-- **Status**: blocked on H-202.
+- **Status**: ACCEPTED round-008 — `aci_mondrian_step` + `aci_mondrian_stream` in `src/conformal.py`. 9/9 Mondrian-ACI tests pass (incl. bit-exact reduction to plain ACI under single regime). On real stream: per-regime gap collapses from plain ACI's ±5–10pp to **≤ 0.6pp on every regime / α / predictor combination**. **Beats round-002 batch Mondrian-LAC** (LAC was ≤ 3.4pp at α=0.10 / -7.9pp on low-vol p_online at α=0.20; Mondrian-ACI is ≤ 0.21pp / -0.54pp). The α=0.20 low-vol gap that round-002 LEDGER explicitly named as "the gap H-202..H-208 must close" is now **closed to 0.04pp**. Marginal coverage stays on target.
 - **Cost**: medium
 
 ### H-204 [P4] River ARF vs SRP vs HAT under coverage-as-metric

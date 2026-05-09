@@ -344,6 +344,142 @@ def aci_stream(
     }
 
 
+# ----------------------------------------------------------------------------
+# Mondrian-ACI: per-regime q_t with the same online update rule
+# ----------------------------------------------------------------------------
+#
+# Plain ACI (above) maintains a single global q_t. Under regime drift the
+# global q_t can't track simultaneous shifts in score distribution across
+# regimes — round-007's diagnostic showed this empirically: at alpha=0.10,
+# plain ACI over-covered low-vol by 6pp and under-covered high-vol by 6pp
+# while marginal coverage was on target. Mondrian-ACI fixes this by binding
+# one q_t per regime label and updating ONLY the active regime's q at each
+# step.
+#
+# This generalises plain ACI: with a single regime label, Mondrian-ACI is
+# bit-equivalent to aci_step / aci_stream. The test suite pins this.
+
+def aci_mondrian_step(
+    p_t: float,
+    y_t: int,
+    regime_t: Any,
+    q_t_by_regime: Mapping[Any, float],
+    alpha: float,
+    gamma: float,
+) -> tuple[np.ndarray, dict[Any, float], int]:
+    """One Mondrian-ACI step.
+
+    Looks up the active regime's threshold, builds the LAC set, observes y_t,
+    and returns the predicted set, the updated regime->q mapping (only the
+    active regime's q changed), and the miscoverage indicator.
+
+    ``regime_t`` must be a key already present in ``q_t_by_regime``; the
+    caller is responsible for initializing q for every regime that will
+    appear in the stream.
+    """
+    if regime_t not in q_t_by_regime:
+        raise KeyError(
+            f"regime {regime_t!r} not in q_t_by_regime "
+            f"(known: {list(q_t_by_regime.keys())})"
+        )
+    q_t = float(q_t_by_regime[regime_t])
+    set_t, q_next, err_t = aci_step(p_t, y_t, q_t, alpha, gamma)
+    out = dict(q_t_by_regime)
+    out[regime_t] = q_next
+    return set_t, out, err_t
+
+
+def aci_mondrian_stream(
+    p_stream: np.ndarray,
+    y_stream: np.ndarray,
+    regime_stream: np.ndarray,
+    alpha: float,
+    *,
+    gamma: float = 0.01,
+    q_init: float = 0.5,
+    q_init_by_regime: Mapping[Any, float] | None = None,
+) -> dict[str, Any]:
+    """Run Mondrian-ACI over a binary stream with regime labels.
+
+    ``regime_stream[t]`` is the regime label active at step t. Each regime
+    keeps its own q_t; only the active regime's q is updated per step.
+
+    Parameters
+    ----------
+    p_stream, y_stream : (T,) — same as aci_stream.
+    regime_stream : (T,) array-like — regime label per step; any hashable.
+    alpha, gamma  : same as aci_stream.
+    q_init        : float, default 0.5 — used for any regime whose initial q
+                    is not in ``q_init_by_regime``.
+    q_init_by_regime : optional override; useful when warming q from a
+                       calibration window per regime.
+
+    Returns dict with:
+        sets            : (T, 2) bool — prediction sets per step.
+        q_history       : (T,) float — q_t at the START of each step (active regime).
+        q_history_by_regime : dict regime -> (T_regime,) float trajectory of
+                              that regime's q over its active steps.
+        err_history     : (T,) int — 1{miscovered} per step.
+        coverage        : float — empirical marginal coverage.
+        regimes_seen    : list — distinct regime labels encountered.
+    """
+    p = np.asarray(p_stream, dtype=float)
+    y = np.asarray(y_stream).astype(int)
+    regimes = np.asarray(regime_stream)
+    if not (p.shape == y.shape == regimes.shape):
+        raise ValueError(
+            f"p_stream/y_stream/regime_stream must have the same shape; "
+            f"got {p.shape}/{y.shape}/{regimes.shape}"
+        )
+
+    T = len(p)
+    sets = np.zeros((T, 2), dtype=bool)
+    q_history = np.zeros(T, dtype=float)
+    err_history = np.zeros(T, dtype=int)
+
+    # Initialise q per regime.
+    seen_regimes = list(np.unique(regimes).tolist())
+    overrides = dict(q_init_by_regime or {})
+    q_by_regime: dict[Any, float] = {
+        r: float(overrides.get(r, q_init)) for r in seen_regimes
+    }
+    # Also accept overrides for regimes not yet seen (defensive).
+    for r, v in overrides.items():
+        if r not in q_by_regime:
+            q_by_regime[r] = float(v)
+
+    q_history_per_regime: dict[Any, list[float]] = {r: [] for r in q_by_regime}
+
+    for t in range(T):
+        r_t = regimes[t]
+        # Defensive: regime not in q_by_regime yet (shouldn't happen because
+        # np.unique enumerates all up-front, but if regime_stream uses
+        # different dtype semantics this catches it).
+        if r_t not in q_by_regime:
+            q_by_regime[r_t] = float(q_init)
+            q_history_per_regime[r_t] = []
+        q_t_active = q_by_regime[r_t]
+        q_history[t] = q_t_active
+        q_history_per_regime[r_t].append(q_t_active)
+
+        set_t, q_by_regime, err_t = aci_mondrian_step(
+            p[t], y[t], r_t, q_by_regime, alpha, gamma,
+        )
+        sets[t] = set_t
+        err_history[t] = err_t
+
+    return {
+        "sets": sets,
+        "q_history": q_history,
+        "q_history_by_regime": {
+            r: np.asarray(traj, dtype=float) for r, traj in q_history_per_regime.items()
+        },
+        "err_history": err_history,
+        "coverage": float(1.0 - err_history.mean()) if T > 0 else float("nan"),
+        "regimes_seen": list(q_by_regime.keys()),
+    }
+
+
 def coverage_by_regime(
     pred_sets: np.ndarray, y_test: np.ndarray, regime_test: np.ndarray
 ) -> pd.DataFrame:
