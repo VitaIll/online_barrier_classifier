@@ -1,7 +1,67 @@
 {
   "permissions": {
+    "defaultMode": "bypassPermissions",
     "allow": [
-      "Bash(jupyter nbconvert *)"
+      "Bash(jupyter nbconvert *)",
+      "Bash(python *)",
+      "Bash(pwsh *)",
+      "Bash(powershell *)",
+      "Bash(pytest *)",
+      "Bash(make *)",
+      "Bash(git *)",
+      "Bash(gh *)",
+      "Bash(pip *)",
+      "Bash(jupyter *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(mkdir *)",
+      "Bash(mv *)",
+      "Bash(cp *)",
+      "Bash(rm *)",
+      "Bash(echo *)",
+      "Bash(date *)",
+      "Bash(printenv *)",
+      "PowerShell",
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "Agent",
+      "TodoWrite",
+      "ToolSearch",
+      "ScheduleWakeup",
+      "WebFetch",
+      "WebSearch",
+      "Skill",
+      "mcp__scheduled-tasks__create_scheduled_task",
+      "mcp__scheduled-tasks__update_scheduled_task",
+      "mcp__scheduled-tasks__list_scheduled_tasks"
+    ],
+    "deny": [
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git reset --hard origin/main)",
+      "Bash(git reset --hard origin/master)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~/*)"
     ]
+  },
+  "alwaysThinkingEnabled": true,
+  "effortLevel": "xhigh",
+  "showThinkingSummaries": true,
+  "enableAllProjectMcpServers": true,
+  "skipDangerousModePermissionPrompt": true,
+  "skipAutoPermissionPrompt": true,
+  "doneMeansMerged": true,
+  "autoCompactEnabled": true,
+  "todoFeatureEnabled": true,
+  "env": {
+    "MAX_THINKING_TOKENS": "64000",
+    "CLAUDE_CODE_MAX_THINKING_TOKENS": "64000"
   }
 }
