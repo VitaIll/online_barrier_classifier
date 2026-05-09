@@ -26,11 +26,13 @@ Regenerated at end of each round.
 
 ## Architecture context (online_barrier_classifier specifically)
 - Decision interval: M=20 minutes
-- Offline: CatBoost (langevin=True) — `artifacts/offline_model/`
-- Online: River ARFClassifier correction layer — `notebooks/online_eval.ipynb`
-- Combined-system metric: online_corrected ROC=0.799 vs offline ROC=0.813 (legacy run)
-  but Brier 0.076 vs 0.090 → **online layer trades ranking for calibration** (~16% Brier reduction)
-- The autonomous loop's mission: improve BOTH stages, with primary focus on the online correction layer (ask 2), all under deflated-Sharpe + regime-stratified ECE accept gates.
+- **Offline stage**: CatBoost (langevin=True) → raw `p_offline`. Lives in `artifacts/offline_model/`.
+- **Online stage = streaming conformal coverage layer** (River ARFClassifier currently, fed `selected_features + p_offline`). It is **NOT** a separate classifier — its job is to provide *input-conditional coverage* on `P(y=1 | x_k)` in a streaming, drift-aware way. `notebooks/online_eval.ipynb` runs the prequential evaluation.
+- Combined-system metric (legacy): online ROC=0.799 vs offline ROC=0.813 (online slightly worse on ranking) BUT Brier 0.076 vs 0.090 (~16% reduction) — **online layer trades ranking for calibration**, exactly the conformal-coverage trade-off.
+- Primary metrics for online-stage rounds: **marginal empirical coverage + per-regime coverage gap + set tightness**. NOT raw Brier or ROC.
+- References to lean on: Gibbs & Candès (2021) Adaptive Conformal Inference; Vovk (2003) Mondrian; Manokhin (2024) for implementation; Lekeufack et al. (2024) Conformal Decision Theory for the trade-gate composition.
+
+The loop's mission: improve both stages, but the online-stage rounds are framed as **conformal-coverage improvements** (ACI, Mondrian-ACI, locally-weighted), not "alternative classifiers".
 
 ## Open questions for the human
 1. Cron cadence: every 6h via PowerShell daemon? Or fireAt-based self-trigger only?

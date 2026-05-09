@@ -1,10 +1,21 @@
 # Hypothesis Backlog
 
-The autonomous loop targets `online_barrier_classifier` — the **combined offline + online** system. The differentiator vs the sibling `barrier_classifier` (offline-only research) is the online River ARF correction layer that consumes offline probabilities and improves calibration in a streaming, drift-aware way.
+The autonomous loop targets `online_barrier_classifier`. The architecture is:
 
-Status legend: `queued` / `in_progress` / `iterate` / `blocked`. Priority P1–P5 reflects expected α-on-user-goal / cost-to-evaluate.
+```
+offline CatBoost  →  p_offline
+                     +
+              streaming conformal calibration layer  →  P(y=1 | x_k)
+                                                          (conditional coverage)
+```
 
-Top of file = highest priority. The loop picks from the top.
+The "online stage" (currently River `ARFClassifier`, fed `selected_features + p_offline`) is a **streaming conformal calibration / coverage layer**, not a separate classifier. The differentiator vs the sibling `barrier_classifier` (offline-only) is exactly this layer, and most "online improvements" are framed as conformal-coverage improvements (ACI, Mondrian-ACI, locally-weighted conformal, etc.).
+
+User asks 2 (online) and 6 (UQ) collapse onto one axis: **improve the streaming conformal coverage layer.**
+
+Status legend: `queued` / `in_progress` / `iterate` / `blocked`. Priority P1–P5 = expected α-on-user-goal / cost.
+
+Top of file = highest priority.
 
 ---
 
@@ -42,48 +53,61 @@ Top of file = highest priority. The loop picks from the top.
 
 ---
 
-## Tier 1 — Online model improvements (this project's differentiator; ask 2)
+## Tier 1 — Streaming conformal coverage layer (asks 2 + 6, the project's differentiator)
 
-### H-030 [P5] River SRPClassifier vs ARF baseline
-- **Owner**: CODE-SCOUT + IMPLEMENTER
-- **Mechanism**: replace `ARFClassifier` with `river.ensemble.SRPClassifier` in the online pipeline. Same warmup+test stream. Compare Brier / log-loss / drift detection.
-- **Falsification**: paired prequential test on identical streams; SRP must beat ARF on Brier on ≥2/3 seeds.
-- **Status**: queued
-- **Cost**: low
+The online stage is a streaming conformal layer providing conditional coverage. These rounds explicitly improve coverage validity and tightness, NOT raw ranking.
 
-### H-031 [P4] Hoeffding Adaptive Tree + ALMA stack
-- **Mechanism**: `HoeffdingAdaptiveTreeClassifier` + `ALMAClassifier` averaged with ARF. `compose.Stacker` or weighted-mean tracked online.
+### H-201 [P5] Baseline coverage diagnostic on the existing online ARF
+- **Owner**: IMPLEMENTER + THEORIST
+- **Mechanism**: treat the existing River `ARFClassifier` output as if it were a conformal predictor at varying confidence levels (set construction via `predict_proba_one`). Compute marginal empirical coverage AND per-regime coverage on the test split. Quantify *coverage gap* = 1 - α - empirical_coverage by regime. This becomes the baseline every online-stage hypothesis must beat.
+- **Falsification**: report finite numbers; a > 5% absolute coverage gap in any regime is the gap to close.
+- **Status**: queued — first round attacking ask 2.
+- **Cost**: low (no model changes; just measurement)
+
+### H-202 [P5] Adaptive Conformal Inference (Gibbs & Candès 2021)
+- **Owner**: LITERATURE-SCOUT + IMPLEMENTER + CRITIC
+- **Mechanism**: implement online ACI on top of the offline CatBoost. The threshold `q_t` evolves: `q_{t+1} = q_t + γ(α - 1{y_t ∈ C_t(x_t)})`. Compare marginal + per-regime coverage and set tightness vs the current ARF baseline (H-201). The hypothesis: ACI matches or beats the ARF's de-facto coverage with simpler, theoretically grounded calibration.
+- **Falsification**: marginal empirical coverage must converge to 1-α (within 2σ over the stream); per-regime gap must not be worse than ARF baseline.
+- **Status**: queued (depends on H-201 baseline)
+- **Cost**: medium
+
+### H-203 [P5] Mondrian-ACI hybrid for regime-conditional coverage
+- **Mechanism**: extend H-202 to maintain a separate `q_t` per volatility tercile (regime). Closes the per-regime coverage gap that plain ACI may leave open under regime drift.
+- **Status**: blocked on H-202.
+- **Cost**: medium
+
+### H-204 [P4] River ARF vs SRP vs HAT under coverage-as-metric
+- **Mechanism**: paired prequential test of `ARFClassifier`, `SRPClassifier`, `HoeffdingAdaptiveTreeClassifier`. Primary metric: marginal + per-regime coverage at α=0.1, plus set tightness. Secondary: Brier.
 - **Status**: queued
 - **Cost**: medium
 
-### H-032 [P4] Streaming isotonic / Platt calibration in River pipeline
-- **Mechanism**: wrap online classifier in `river.calibration.IsotonicCalibrator`. Maintains calibrated probs as drift accumulates.
+### H-205 [P4] Locally-weighted conformal (kernel-local validity)
+- **Mechanism**: at test point x, weight calibration scores by kernel similarity to x. Provides conditional-coverage-by-feature-similarity. Reference: Manokhin Ch. 9.
 - **Status**: queued
-- **Cost**: low
+- **Cost**: medium
 
-### H-033 [P3] Online feature standardization
-- **Mechanism**: `compose.Pipeline(preprocessing.StandardScaler() | model)`.
-- **Status**: queued
-- **Cost**: low
+### H-206 [P4] CatBoost virtual-ensemble σ_epistemic as a conformal feature
+- **Mechanism**: add `sigma_epistemic` from `src/uncertainty.py` to the conformal layer's score function. Tests whether epistemic uncertainty improves coverage tightness.
+- **Status**: queued; subsumes the prior H-010.
+- **Cost**: medium
 
-### H-034 [P3] ADWIN drift detector on prediction error
-- **Mechanism**: feed `(p_k - y_k)^2` into ADWIN; on detected drift, log a marker and optionally reset selected base learners.
+### H-207 [P3] ADWIN drift detector triggers ACI threshold reset
+- **Mechanism**: feed prediction errors into ADWIN; on detected drift, soft-reset `q_t` toward the prior. Hardens ACI against regime breaks.
 - **Status**: queued
 - **Cost**: low
 
 ---
 
-## Tier 2 — UQ + conformal wired into the offline+online flow (asks 6, 4)
+## Tier 2 — Conformal coverage applied to backtest decisions (ask 4)
 
-### H-010 [P5] Wire CatBoost virtual-ensemble UQ into 03_offline_train + online_eval
-- **Mechanism**: use `src/uncertainty.py::predict_with_decomposed_uq` on the offline CatBoost; expose `sigma_epistemic` to the online layer's input vector (alongside `p_offline`). Test whether the online ARF benefits from epistemic-uncertainty signal.
-- **Falsification**: paired comparison: online layer with vs without `sigma_epistemic` feature. Brier delta.
-- **Status**: queued (depends on H-103 + a model retrain)
+### H-011 [P5] Conformal LAC + Mondrian for trade abstention (offline)
+- **Mechanism**: use the *batch* split-conformal in `src/conformal.py` (already ported) to gate trade entries — abstain when prediction set is full {0,1}. Combined with H-005's backtest harness for an abstention-aware Sharpe.
+- **Status**: queued (depends on H-005)
 - **Cost**: medium
 
-### H-011 [P5] Conformal LAC + Mondrian for trade abstention
-- **Mechanism**: `src/conformal.py` is ported. Use it to produce prediction sets at α = 0.1, 0.2; `conformal_trade_signal` gates the trader's entries. Combined with H-005's backtest harness for an actual abstention-aware Sharpe.
-- **Status**: queued (depends on H-005)
+### H-208 [P4] Streaming conformal trade gate (online ACI variant)
+- **Mechanism**: same as H-011 but using the online ACI threshold from H-202; coverage adapts as the stream evolves.
+- **Status**: blocked on H-011 + H-202.
 - **Cost**: medium
 
 ---
