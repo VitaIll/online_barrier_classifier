@@ -1,4 +1,4 @@
-.PHONY: test test-fast round preflight fast-train clean lint help loop-status loop-daemon critic compact compact-apply merge-round kill-round
+.PHONY: test test-fast preflight fast-train clean lint help critic compact compact-apply
 
 PYTHON ?= python
 
@@ -7,35 +7,14 @@ help:
 	@echo "  make test          Run the full pytest suite"
 	@echo "  make test-fast     Run only the causality + weights tests (fast subset)"
 	@echo "  make preflight     Run scripts/run_round.py --preflight"
-	@echo "  make round         Open a fresh round branch (delegates to the agent)"
+	@echo "  make critic        Run CRITIC checklist on staged + working changes"
+	@echo "  make compact       Dry-run compaction (LEDGER, plots, MLflow)"
+	@echo "  make compact-apply Apply compaction"
 	@echo "  make fast-train    Train a CatBoost run with FAST_MODE=1 (year 2024 only)"
 	@echo "  make lint          Ruff + black --check (no autoformat)"
 	@echo "  make clean         Remove __pycache__, .pytest_cache, mlruns/.trash, .tmp"
-	@echo "  make loop-status   Print loop health digest (heartbeat + LEDGER tail + branches)"
-	@echo "  make loop-daemon   Run scripts/loop_daemon.ps1 (PowerShell, foreground)"
-	@echo "  make critic        Run CRITIC checklist on current branch"
-	@echo "  make compact       Dry-run compaction (LEDGER, plots, branches, MLflow)"
-	@echo "  make compact-apply Apply compaction"
-	@echo "  make merge-round H=H-005    FF current agent/round-* branch onto master + tag + delete"
-	@echo "  make kill-round H=H-005 R='reason'  Delete current branch + append KILL_LIST"
-
-loop-status:
-	$(PYTHON) scripts/loop_status.py
-
-loop-tail:
-	$(PYTHON) scripts/tail_round.py
-
-loop-tail-tools:
-	$(PYTHON) scripts/tail_round.py --tools-only --tail 60
-
-loop-daemon:
-	powershell -ExecutionPolicy Bypass -File scripts/loop_daemon.ps1
-
-loop-daemon-dry:
-	powershell -ExecutionPolicy Bypass -File scripts/loop_daemon.ps1 -DryRun -MaxRounds 2
-
-loop-once:
-	powershell -ExecutionPolicy Bypass -File scripts/loop_daemon.ps1 -MaxRounds 1
+	@echo ""
+	@echo "Loop runs in this Claude Code session (see RESEARCH/LOOP_DISCIPLINE.md)."
 
 critic:
 	$(PYTHON) scripts/critic_check.py
@@ -46,12 +25,6 @@ compact:
 compact-apply:
 	$(PYTHON) scripts/compact_loop_state.py --apply
 
-merge-round:
-	$(PYTHON) scripts/merge_round.py merge --hypothesis $(H)
-
-kill-round:
-	$(PYTHON) scripts/merge_round.py kill --hypothesis $(H) --reason "$(R)"
-
 test:
 	$(PYTHON) -m pytest -q tests/
 
@@ -60,10 +33,6 @@ test-fast:
 
 preflight:
 	$(PYTHON) scripts/run_round.py --preflight
-
-round: preflight
-	@echo "Round preflight passed. The autonomous agent now picks up the next BACKLOG item."
-	@echo "To trigger manually, run the scheduled task once via the agent harness."
 
 fast-train:
 	BARRIER_FAST_MODE=1 $(PYTHON) -c "import nbformat; from nbconvert.preprocessors import ExecutePreprocessor; \

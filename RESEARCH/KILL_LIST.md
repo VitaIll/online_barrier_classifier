@@ -9,4 +9,4 @@ Schema:
 
 ---
 
-[round 002] H-201 streaming-conformal-coverage-baseline — killed pre-completion: orphaned branch from old master ancestry (pre-discipline rollout). Branch was 1 commit ahead of master (5bf64cf "ignore /mlruns/") with no experiment work yet. Will be re-opened cleanly under GIT_DISCIPLINE.md rules.
+(empty — RETRACTED: round 002 entry removed because the round actually completed legitimate work (H-201 accept, see commit 2ef7bfc). The "kill" was a false alarm during discipline rollout — the branch was killed but the work was recovered from the session JSONL and committed to master.)

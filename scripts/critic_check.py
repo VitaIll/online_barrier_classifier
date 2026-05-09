@@ -59,13 +59,18 @@ def _git(cmd: list[str]) -> str:
 
 
 def _git_diff_files() -> list[str]:
-    """List of files changed on the current branch vs main."""
-    out = _git(["diff", "--name-only", "master..HEAD"])
+    """List of files changed in this round (uncommitted: staged + unstaged vs HEAD).
+
+    The new in-session loop runs entirely on master with no per-round branch.
+    CRITIC fires AFTER the round's edits land in the working tree but BEFORE
+    commit, so the round's contribution is `git diff HEAD`.
+    """
+    out = _git(["diff", "HEAD", "--name-only"])
     return [ln for ln in out.splitlines() if ln]
 
 
 def _git_diff_text() -> str:
-    return _git(["diff", "master..HEAD"])
+    return _git(["diff", "HEAD"])
 
 
 def check_pytest_passing(report: ReviewReport) -> None:
@@ -104,16 +109,6 @@ def check_causality_tests(report: ReviewReport) -> None:
     ], cwd=REPO, capture_output=True, text=True)
     report.add("causality_property_tests", p.returncode == 0,
                (p.stdout or "")[-300:] if p.returncode != 0 else f"green ({len(present)} files)")
-
-
-def check_no_main_modifications(report: ReviewReport) -> None:
-    """Ensure no commits landed on main during this branch's life."""
-    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"])
-    if branch in ("main", "master"):
-        report.add("not_on_master", False,
-                    f"current branch is {branch}; round work must be on agent/round-*")
-    else:
-        report.add("not_on_master", True, f"branch={branch}")
 
 
 def check_no_force_or_skip(report: ReviewReport) -> None:
@@ -191,12 +186,6 @@ def check_no_label_features_leakage(report: ReviewReport) -> None:
                f"flagged: {flagged[:3]}" if flagged else "clean")
 
 
-def check_branch_naming(report: ReviewReport) -> None:
-    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"])
-    ok = bool(re.match(r"^agent/round-\d{3}-[a-z0-9-]+$", branch))
-    report.add("branch_naming", ok, f"branch={branch}")
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--hypothesis", default="?")
@@ -208,8 +197,6 @@ def main() -> int:
 
     report = ReviewReport()
     try:
-        check_branch_naming(report)
-        check_no_main_modifications(report)
         check_no_force_or_skip(report)
         check_no_label_features_leakage(report)
         check_causality_tests(report)

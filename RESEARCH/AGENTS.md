@@ -67,8 +67,7 @@ chapters; cite chapters.
 ## CRITIC
 **Purpose**: independent audit. Veto power.
 
-**Mandatory checklist** — runs `python scripts/critic_check.py --json` first; the JSON output must show `must_passed=true`. The script verifies:
-- branch is `agent/round-NNN-*`, not main/master
+**Mandatory checklist** — runs `python scripts/critic_check.py --json` first; the JSON output must show `must_passed=true`. The script verifies (against `git diff HEAD` — the round's uncommitted contribution on master):
 - no `--no-verify` / `--force` in recent commits
 - no label-derived columns (m_k, tau_k, phi, w_dist, w_time, weight) in any added feature_list / feature_cols line
 - causality + property + weights + splits tests all green
@@ -87,15 +86,12 @@ chapters; cite chapters.
 
 Return one of: **APPROVE** (script + substantive both green), **REQUEST_CHANGES** (one or more fixable issues, list them), or **VETO** (irrecoverable: leakage, fabricated metrics, scope explosion).
 
-**Handoff** (from `RESEARCH/GIT_DISCIPLINE.md`):
-- APPROVE → round agent runs `python scripts/merge_round.py merge --hypothesis H-NNN`.
-  This fast-forwards master, runs post-merge pytest, tags `round-NNN-accepted`,
-  deletes the branch, pushes to origin if present. **No draft PRs.**
-- REQUEST_CHANGES → one iteration attempt; if still red, kill.
-- VETO → `python scripts/merge_round.py kill --hypothesis H-NNN --reason "<one-line>"`.
-  Appends KILL_LIST.md, deletes the branch. No iteration on VETO.
+**Handoff** (see `RESEARCH/LOOP_DISCIPLINE.md`):
+- APPROVE → round agent commits on master with structured message and tags `round-NNN-accepted`. No PR, no branch ceremony.
+- REQUEST_CHANGES → one iteration attempt; if still red, kill (KILL_LIST entry, no commit, working tree reset via `git checkout -- .`).
+- VETO → KILL_LIST entry, working tree reset, no commit.
 
-**Veto override**: none. A round with VETO is killed. No carrying state forward.
+**Veto override**: none. A round with VETO is killed cleanly; no carrying state forward.
 
 ## HOUSEKEEPER
 **Purpose**: keep the repo and loop state clean.

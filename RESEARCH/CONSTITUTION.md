@@ -1,6 +1,8 @@
 # Research-Engineering Loop — Constitution
 
-The autonomous loop must obey these invariants. Any round that violates them is rolled back, regardless of metric improvement. The CRITIC sub-agent has veto power on every PR.
+The autonomous loop must obey these invariants. Any round that violates them is rolled back, regardless of metric improvement. The CRITIC sub-agent has veto power on every commit.
+
+The loop runs **in a single Claude Code session**, self-scheduled via `ScheduleWakeup` (under `/loop` dynamic mode). See [`LOOP_DISCIPLINE.md`](LOOP_DISCIPLINE.md) for per-iteration structure, git rules, and halt conditions.
 
 ## 0. Project architecture snapshot
 
@@ -65,8 +67,8 @@ These reflect `online_barrier_classifier`'s actual implementation, NOT the sibli
 7. **Prequential discipline (online stage).** The streaming conformal coverage layer must follow predict-then-learn-with-delayed-label. Specifically: at decision bar `k`, predict `p_online_k` using `(features_k + p_offline_k)` first; only when bar `k+1` arrives, compute `y_k` from `H_{k+1}`, then call `learn_one(z_{k}, y_k)` on the streaming model. The current `notebooks/online_eval.ipynb` implements this via a `label_buffer` deque — that idiom is the contract.
 
 ## II. Process invariants
-1. **Branch-per-round, no automerge.** Each round commits to `agent/round-NNN-<slug>`. Never push to `master`. PRs are opened only after CRITIC approval; the human merges.
-2. **One commit per round.** Squash all working commits into a single commit at end-of-round with a structured message (template in `ROUND_TEMPLATE.md`).
+1. **Single branch (`master`), commit per accepted round.** No `agent/round-*` branches, no draft PRs, no merge ceremony. CRITIC must pass before commit; killed rounds get a `KILL_LIST.md` entry and no commit. Every accepted round gets a `round-NNN-accepted` tag.
+2. **One commit per accepted round.** Structured commit message: `agent/round-NNN: <summary> (H-xxx) [accept|hotfix]` with Co-Authored-By trailer.
 3. **Pytest must pass before commit.** `make test` is a precondition; a red test halts the round.
 4. **Reproducibility.** All RNGs seeded (numpy, catboost, optuna, river). MLflow run ID logged in `LEDGER.md`. The exact data slice (start/end timestamp, fast-mode flag) recorded in MLflow tags.
 5. **FAST_MODE for experimentation.** Hypothesis evaluation uses `FAST_MODE=1` (subsampled data + features) unless the LEDGER explicitly requests a full run for an accept-gate.
@@ -117,15 +119,16 @@ These can appear as **null-skill comparators** in falsification or in bootstrap 
 - **The HOUSEKEEPER sub-agent** runs once per week to prune redundant artifacts and surface drift.
 
 ## VII. Authorization scope (what the loop may do without asking)
-- Create/modify files under `barrier_classifier/`
+- Create/modify files under the repo
 - Run pytest, train models, log to MLflow
-- Commit to `agent/round-NNN-*` branches
-- Open draft PRs to `main`
+- Commit accepted rounds directly to `master` (CRITIC must pass first)
+- Tag accepted rounds (`round-NNN-accepted`)
 - Append to LEDGER, KILL_LIST, REPORT_LATEST
+- `ScheduleWakeup` to continue the loop
 
 The loop must NOT (without explicit human authorization):
-- Push to `main` or merge any PR
-- Force-push to any branch
+- Push to a remote (`git push`)
+- Force-push to any branch / amend pushed commits
 - Delete data files
 - Modify global git config or CI secrets
 - Bypass any gate (no `--no-verify`, no skipping CRITIC)
