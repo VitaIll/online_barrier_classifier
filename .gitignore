@@ -9,6 +9,9 @@ data/
 .ruff_cache/
 .mypy_cache/
 .tmp/
+__pycache__/
+*.pyc
+*.pyo
 
 # Round-local in-progress files
 RESEARCH/HYPOTHESIS.md.draft
