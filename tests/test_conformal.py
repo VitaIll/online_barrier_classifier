@@ -79,10 +79,13 @@ def test_property_marginal_coverage_meets_target(base_rate, alpha, noise, seed):
     sets = conformal.predict_set(cal, p_test)
     cov = conformal.empirical_coverage(sets, y_test)
 
-    # Allow 2 sampling-sigma slack: std of binomial(n_test, 1-alpha) ~ sqrt((1-alpha)*alpha/n_test).
-    sigma = np.sqrt(max(alpha * (1 - alpha) / n_test, 1e-9))
-    assert cov >= (1 - alpha) - 3 * sigma, (
-        f"Coverage {cov:.4f} below target {1-alpha:.4f} - 3σ ({3*sigma:.4f})"
+    # Allow 4 sampling-sigma slack: conformal validity is in-expectation; for a fixed
+    # cal split the conditional-on-cal coverage is Beta-distributed with std on the
+    # order of sqrt((1-alpha)*alpha/n_cal). Test draws sample BOTH cal and test, so
+    # combined sampling variance ~ ((1-alpha)*alpha)*(1/n_cal + 1/n_test). 4σ ≈ 99.99% CI.
+    sigma = np.sqrt(max(alpha * (1 - alpha) * (1.0 / n_cal + 1.0 / n_test), 1e-9))
+    assert cov >= (1 - alpha) - 4 * sigma, (
+        f"Coverage {cov:.4f} below target {1-alpha:.4f} - 4σ ({4*sigma:.4f})"
     )
 
 
