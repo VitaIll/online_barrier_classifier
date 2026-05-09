@@ -5,6 +5,7 @@ data/
 # Autonomous loop runtime
 /experiments/mlruns/
 /experiments/feature_cache/
+/mlruns/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/

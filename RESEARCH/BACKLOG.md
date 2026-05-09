@@ -56,8 +56,23 @@ Top of file = highest priority.
 - **Asks**: ask 4 — **first PnL number**
 - **Mechanism**: load `artifacts/offline_model/model.cbm` and the persisted online predictions in `artifacts/online_eval/predictions.parquet` (already on disk from a previous run). Feed `p_offline` and `p_final` columns into `src/backtest.py::simulate_inventory_aware` with M=20, φ=0.00411 (matched to label α), c_stop ≈ φ initially (symmetric — see strategy-realism CONSTITUTION V.b). Compare offline-only-decisions vs offline+online-decisions vs always-on null under realistic costs. Tag round `backtest` (30-min budget).
 - **Falsification**: harness emits finite metrics on real predictions; null Sharpe is approximately 0 (with symmetric barriers) or negative (with c_stop < φ); offline+online Sharpe matches or exceeds offline-only.
-- **Status**: in_progress (round 001) — does NOT depend on H-101..H-103 (the predictions.parquet file already exists from `notebooks/online_eval.ipynb`'s last run; no need to re-run training).
-- **Cost**: 30 min (backtest-tagged budget)
+- **Status**: ACCEPTED round-001 — finite metrics confirmed on real stream; p_offline τ=0.30 Sharpe=+1.50 PSR=0.995 with bootstrap p<0.001 vs shuffled-signal null. Online layer (p_final=p_online) does NOT add Sharpe at any τ tested — consistent with CONSTITUTION I (online optimizes coverage not ranking). Spawned H-005b + H-005c.
+- **Cost**: 30 min (actual: ~7 min wall-clock)
+
+### H-005b [P5] (spawned by round 001) Validation-split τ_open selection for the H-005 sweep
+- **Owner**: IMPLEMENTER
+- **Asks**: ask 4 (rigorous evaluation per CONSTITUTION V.b)
+- **Mechanism**: round 001 picked τ_open as a post-hoc grid because the existing `artifacts/online_eval/` only persists test predictions. Re-run `notebooks/offline_train.ipynb` + `notebooks/online_eval.ipynb` to additionally persist a `predictions_val.parquet` (the chronological val window that was already used for early-stopping). Sweep τ_open on val Sharpe + PR-AUC, pick winner per CONSTITUTION V.b, then evaluate at fixed τ on test. Tag `backtest` (30-min budget). Compare round-001's post-hoc τ=0.30 to the val-chosen τ — if they coincide, the round-001 result holds; if they diverge, the round-001 numbers are demoted to "exploratory only" in REPORT_LATEST.
+- **Falsification**: val-chosen τ for p_offline lands inside the round-001 post-hoc grid {0.10..0.50}; if the val-Sharpe-grid optimum is outside this range, the round-001 sweep was insufficiently wide.
+- **Status**: queued (depends on a notebook re-run, not on a model retrain)
+- **Cost**: medium (notebook surgery + 1 retrain)
+
+### H-005c [P3] (spawned by round 001) CSCV PBO deflation of the H-005 τ sweep
+- **Owner**: IMPLEMENTER + LITERATURE-SCOUT
+- **Asks**: ask 4 — overfitting check on the post-hoc τ grid
+- **Mechanism**: H-113 lands the CSCV / PBO machinery (combinatorially symmetric CV PBO per Bailey et al. 2014). Once H-113 ships, apply it to the round-001 τ_sweep_metrics.csv to compute the PBO of the best post-hoc τ. PBO < 0.5 means the τ=0.30 winner generalizes; PBO ≥ 0.5 means the post-hoc grid was overfit to test. This is the deflation step that justifies promoting round-001 numbers to a "headline" status.
+- **Status**: blocked on H-113.
+- **Cost**: low (post-H-113)
 
 **Round ordering (post-bootstrap)**:
 1. **H-005** — first PnL number (no port dependency).
