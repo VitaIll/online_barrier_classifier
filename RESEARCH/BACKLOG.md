@@ -81,6 +81,7 @@ Top of file = highest priority.
 4. ~~**H-101**~~ — ACCEPTED round-004. Label + split utilities in `src/utils.py`; round-trip validated on persisted parquet; unblocks H-105.
 5. ~~**H-106**~~ — ACCEPTED round-005. Calibration metrics in `src/utils.py`. Per-regime visual proves online's regime-flat ECE thesis empirically.
 6. ~~**H-107**~~ — ACCEPTED round-006. Plot helpers in `src/plotting.py`; weight plots deferred to H-102.
+7. ~~**H-202**~~ — ACCEPTED round-007. ACI in `src/conformal.py`; marginal coverage hits target within 1.5σ on real stream; per-regime gap motivates H-203.
 5. **H-106** — regime-stratified calibration helpers (primary metric per CONSTITUTION IV).
 6. **H-107** — plot helpers + threshold-analysis CSV (visual-first reporting parity with sibling).
 7. **H-202** — Adaptive Conformal Inference on offline output.
@@ -125,7 +126,7 @@ The online stage is a streaming conformal layer providing conditional coverage. 
 - **Owner**: LITERATURE-SCOUT + IMPLEMENTER + CRITIC
 - **Mechanism**: implement online ACI on top of the offline CatBoost. The threshold `q_t` evolves: `q_{t+1} = q_t + γ(α - 1{y_t ∈ C_t(x_t)})`. Compare marginal + per-regime coverage and set tightness vs the current ARF baseline (H-201). The hypothesis: ACI matches or beats the ARF's de-facto coverage with simpler, theoretically grounded calibration.
 - **Falsification**: marginal empirical coverage must converge to 1-α (within 2σ over the stream); per-regime gap must not be worse than ARF baseline.
-- **Status**: queued (depends on H-201 baseline)
+- **Status**: ACCEPTED round-007 — `aci_step` + `aci_stream` in `src/conformal.py`. 14/14 ACI tests pass. On real stream (n_eval=22,040, γ=0.01, q-warmed on n_cal=9,446): marginal coverage @α∈{0.05,0.10,0.20} is 0.9508/0.9018/0.8023 for p_offline and 0.9505/0.9023/0.8023 for p_online — gap to target ≤ 0.003 (≤ 1.5σ where σ ≈ 0.002). G&C 2021 Thm 1 marginal-coverage falsifier PASSES. Per-regime gap matches ARF/lac_marginal (better than naive_threshold's 8-10pp) but is worse than round-002's Mondrian-LAC by ~3-6pp at the high-vol tercile — this is the expected price of using a single global q_t and is exactly what H-203 (Mondrian-ACI) closes.
 - **Cost**: medium
 
 ### H-203 [P5] Mondrian-ACI hybrid for regime-conditional coverage

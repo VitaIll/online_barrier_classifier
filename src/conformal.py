@@ -36,7 +36,7 @@ References (local corpus):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 import math
 import numpy as np
@@ -229,6 +229,118 @@ def set_size_distribution(pred_sets: np.ndarray) -> dict[str, float]:
         "singleton_0": float(np.mean((sizes == 1) & ~pred_sets[:, 1])),
         "singleton_1": float(np.mean((sizes == 1) & pred_sets[:, 1])),
         "full": float(np.mean(sizes == 2)),
+    }
+
+
+# ----------------------------------------------------------------------------
+# Adaptive Conformal Inference (Gibbs & Candès 2021)
+# ----------------------------------------------------------------------------
+#
+# ACI dispenses with the held-out calibration set: the threshold q_t is
+# updated online via a single stochastic-approximation step per observation:
+#
+#     q_{t+1} = q_t + γ * (err_t - α)
+#
+# where err_t = 1{ y_t ∉ C_t(x_t) } is the per-step miscoverage indicator
+# and α ∈ (0,1) is the target miscoverage level. The set C_t(x_t) is built
+# from the SAME LAC score used by the batch path (`lac_score`), so the two
+# routes share the set-construction semantics:
+#
+#     C_t(x) = { y : 1 - p(y|x) <= q_t }
+#
+# Asymptotic guarantee (G&C 2021 Thm 1): for any γ > 0 and any data sequence
+# (no exchangeability assumption), |emp_coverage - (1-α)| → 0 at rate
+# O(1/(γT)) under bounded scores. γ trades off convergence speed vs noise:
+# small γ = slower but tighter; large γ = faster but choppier.
+
+def aci_step(
+    p_t: float,
+    y_t: int,
+    q_t: float,
+    alpha: float,
+    gamma: float,
+) -> tuple[np.ndarray, float, int]:
+    """One ACI step: predict set at threshold q_t, observe y_t, update q.
+
+    Returns
+    -------
+    set_t : (2,) bool array — same convention as ``predict_set``.
+    q_next : float — updated threshold for the next step.
+    err_t : int — 1 if y_t miscovered (y_t ∉ C_t), else 0.
+
+    The threshold is clamped to [0, 1] after the update; without the clamp
+    a long miscoverage run on a degenerate stream could push q_t outside the
+    score range and freeze the dynamics.
+    """
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha must be in (0, 1), got {alpha}.")
+    if gamma < 0.0:
+        raise ValueError(f"gamma must be >= 0, got {gamma}.")
+
+    # Set construction — mirrors predict_set() for batch consistency.
+    set_t = np.array(
+        [
+            (1.0 - p_t) >= 1.0 - q_t,  # class 0 in set
+            p_t >= 1.0 - q_t,          # class 1 in set
+        ],
+        dtype=bool,
+    )
+    y_int = int(y_t)
+    if y_int not in (0, 1):
+        raise ValueError(f"y_t must be 0 or 1, got {y_t}.")
+    err_t = 0 if set_t[y_int] else 1
+    q_next = float(np.clip(q_t + gamma * (err_t - alpha), 0.0, 1.0))
+    return set_t, q_next, err_t
+
+
+def aci_stream(
+    p_stream: np.ndarray,
+    y_stream: np.ndarray,
+    alpha: float,
+    *,
+    gamma: float = 0.01,
+    q_init: float = 0.5,
+) -> dict[str, Any]:
+    """Run ACI over a binary classification stream.
+
+    Parameters
+    ----------
+    p_stream : (T,) float — predicted P(y=1) at each step.
+    y_stream : (T,) int — observed labels (0/1).
+    alpha    : float — target miscoverage.
+    gamma    : float, default 0.01 — learning rate.
+    q_init   : float, default 0.5 — initial threshold; 0.5 ≈ neutral.
+
+    Returns dict with:
+        sets       : (T, 2) bool — prediction sets per step
+        q_history  : (T,) float — q_t at the START of each step
+        err_history: (T,) int   — 1{miscovered} per step
+        coverage   : float — empirical marginal coverage over the stream
+    """
+    p = np.asarray(p_stream, dtype=float)
+    y = np.asarray(y_stream).astype(int)
+    if p.shape != y.shape:
+        raise ValueError(
+            f"p_stream and y_stream must have the same shape, got {p.shape} vs {y.shape}."
+        )
+
+    T = len(p)
+    sets = np.zeros((T, 2), dtype=bool)
+    q_history = np.zeros(T, dtype=float)
+    err_history = np.zeros(T, dtype=int)
+
+    q_t = float(q_init)
+    for t in range(T):
+        q_history[t] = q_t
+        set_t, q_t, err_t = aci_step(p[t], y[t], q_t, alpha, gamma)
+        sets[t] = set_t
+        err_history[t] = err_t
+
+    return {
+        "sets": sets,
+        "q_history": q_history,
+        "err_history": err_history,
+        "coverage": float(1.0 - err_history.mean()) if T > 0 else float("nan"),
     }
 
 
