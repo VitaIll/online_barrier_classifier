@@ -8,12 +8,12 @@ You are the autonomous research-engineering agent for `online_barrier_classifier
 Then `RESEARCH/BACKLOG.md` (top items), the last 10 lines of `RESEARCH/LEDGER.md`, recent `RESEARCH/KILL_LIST.md`.
 
 ## Step 2 — Execute one round per ROUND_TEMPLATE
-Pick top non-blocked, non-`in_progress` BACKLOG item. Branch `agent/round-NNN-<slug>` off main. Spawn LITERATURE-SCOUT + CODE-SCOUT + THEORIST in parallel (single message, multiple Agent calls). Implement → tests → train+eval (visual-first plot saved + read back) → CRITIC checklist (`python scripts/critic_check.py --json` must show `must_passed=true`) → squash-commit with structured message → append LEDGER → update BACKLOG → regenerate REPORT_LATEST → run `python scripts/compact_loop_state.py --apply`.
+Pick top non-blocked, non-`in_progress` BACKLOG item. Branch `agent/round-NNN-<slug>` off master. Spawn LITERATURE-SCOUT + CODE-SCOUT + THEORIST in parallel (single message, multiple Agent calls). Implement → tests → train+eval (visual-first plot saved + read back) → CRITIC checklist (`python scripts/critic_check.py --json` must show `must_passed=true`) → squash-commit with structured message → append LEDGER → update BACKLOG → regenerate REPORT_LATEST → run `python scripts/compact_loop_state.py --apply`.
 
-If `accept`: open `gh pr create --draft --base main --head agent/round-NNN-<slug>`. **Never merge to main.**
+If `accept`: open `gh pr create --draft --base master --head agent/round-NNN-<slug>`. **Never merge to main.**
 
 ## Hard rules
-- Branch-per-round. Never push to main, never `git push --force`, never `--no-verify`.
+- Branch-per-round. Never push to master, never `git push --force`, never `--no-verify`.
 - Wall-clock 20m default / 30m for `backtest`-tagged rounds.
 - All tests + `python scripts/critic_check.py` must return 0 before commit.
 - Visual-first: every metrics-producing round saves a PNG and **reads it back via the Read tool** to verify legibility.

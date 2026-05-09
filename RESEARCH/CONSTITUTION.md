@@ -65,7 +65,7 @@ These reflect `online_barrier_classifier`'s actual implementation, NOT the sibli
 7. **Prequential discipline (online stage).** The streaming conformal coverage layer must follow predict-then-learn-with-delayed-label. Specifically: at decision bar `k`, predict `p_online_k` using `(features_k + p_offline_k)` first; only when bar `k+1` arrives, compute `y_k` from `H_{k+1}`, then call `learn_one(z_{k}, y_k)` on the streaming model. The current `notebooks/online_eval.ipynb` implements this via a `label_buffer` deque — that idiom is the contract.
 
 ## II. Process invariants
-1. **Branch-per-round, no automerge.** Each round commits to `agent/round-NNN-<slug>`. Never push to `main`. PRs are opened only after CRITIC approval; the human merges.
+1. **Branch-per-round, no automerge.** Each round commits to `agent/round-NNN-<slug>`. Never push to `master`. PRs are opened only after CRITIC approval; the human merges.
 2. **One commit per round.** Squash all working commits into a single commit at end-of-round with a structured message (template in `ROUND_TEMPLATE.md`).
 3. **Pytest must pass before commit.** `make test` is a precondition; a red test halts the round.
 4. **Reproducibility.** All RNGs seeded (numpy, catboost, optuna, river). MLflow run ID logged in `LEDGER.md`. The exact data slice (start/end timestamp, fast-mode flag) recorded in MLflow tags.
