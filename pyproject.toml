@@ -1,3 +1,66 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wagie"
+version = "0.3.0"
+description = "Streaming-native ML harness for online barrier classifier (prod ≡ backtest)"
+requires-python = ">=3.10,<3.13"
+authors = [{name = "VitaIll"}]
+readme = "README.md"
+license = {text = "MIT"}
+
+# All deps pinned exactly per F0 contract test T18.
+dependencies = [
+    # Core data
+    "pandas==2.2.3",
+    "numpy>=1.26,<2.0",
+    "scipy>=1.11,<2.0",
+    "pyarrow>=15.0",
+    "polars>=1.5,<2.0",
+
+    # ML
+    "catboost>=1.2.5,<1.3",
+    "river>=0.21,<0.25",              # match installed 0.24.2 on dev machine
+    "scikit-learn>=1.4,<1.6",
+    "skfolio>=0.5,<1.0",
+    "skrub>=0.3,<1.0",
+    "crepes>=0.7,<1.0",
+    "mlfinpy>=0.1.2,<0.2",            # solo-maintained alpha; pinned tightly
+
+    # Numerical
+    "numba>=0.59,<0.62",
+
+    # Validation / IO
+    "pydantic>=2.6,<3.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.65",
+
+    # Charts / report
+    "matplotlib>=3.7,<4.0",
+
+    # Tracking (optional in code paths)
+    "mlflow>=2.10,<3.0",
+]
+
+[project.scripts]
+wagie = "wagie.__main__:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "hypothesis>=6.100",
+    "pytest-freezer>=0.4",
+    "ruff>=0.6",
+    "black>=24.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["wagie*"]
+
 [tool.pytest.ini_options]
 minversion = "7.0"
 testpaths = ["tests"]
@@ -11,16 +74,19 @@ addopts = [
 markers = [
     "requires_data: test requires the cleansed Binance parquet (skipped if absent)",
     "slow: test takes longer than 5 seconds",
+    "smoke: test runs in <1s; gates every commit",
+    "gating: test gates every PR (~5min budget)",
+    "nightly: test runs on cron only",
 ]
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-src = ["src", "tests", "scripts"]
+src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
-ignore = ["E501"]  # line length handled by black
+ignore = ["E501"]
 
 [tool.black]
 line-length = 100

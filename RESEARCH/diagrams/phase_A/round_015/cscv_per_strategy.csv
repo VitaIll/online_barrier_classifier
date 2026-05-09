@@ -1,6 +1,0 @@
-strategy,n_knobs,n_periods,n_chunks,n_combinations,pbo,median_logit,is_best_modal_knob
-baseline_offline_tau,26,31486.0,16.0,12870.0,0.0,2.7932080094425165,0.3
-baseline_online_tau,26,31486.0,16.0,12870.0,0.0008547008547008547,3.9318256327243235,0.6
-conformal_gate_tau,26,31486.0,16.0,12870.0,0.002874902874902875,3.9318256327243235,0.6
-mondrian_aci_size,6,31486.0,16.0,12870.0,0.0,2.3978952727983702,20.0
-null_random_at_rate,1,,,,,,

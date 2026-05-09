@@ -1,22 +1,34 @@
-# Ignore everything in the data directory
-
+# Data + run outputs — never committed
 data/
+artifacts/
 
-# Autonomous loop runtime
-/experiments/mlruns/
-/experiments/feature_cache/
-/mlruns/
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.tmp/
+# Python build / cache
 __pycache__/
 *.pyc
 *.pyo
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.tmp/
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Legacy MLflow (protocol writes to artifacts/, not here)
+mlruns/
+experiments/mlruns/
+experiments/feature_cache/
 
 # Round-local in-progress files
 RESEARCH/HYPOTHESIS.md.draft
 RESEARCH/.loop_heartbeat.json
 
-# Claude Code runtime locks/state (per-session, not source)
+# Claude Code runtime
 .claude/scheduled_tasks.lock
