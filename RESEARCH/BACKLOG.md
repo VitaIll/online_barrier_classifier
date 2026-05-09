@@ -59,6 +59,20 @@ Top of file = highest priority.
 - **Status**: queued — does NOT depend on H-101..H-103 (the predictions.parquet file already exists from `notebooks/online_eval.ipynb`'s last run; no need to re-run training).
 - **Cost**: 30 min (backtest-tagged budget)
 
+**Round ordering (post-bootstrap)**:
+1. **H-005** — first PnL number (no port dependency).
+2. **H-201** — coverage baseline on existing ARF (measure-only, no model change).
+3. **H-108** — port CatBoostEnsemble class (cheap, unblocks ensemble work).
+4. **H-101** — label + split utilities (round-trip validation).
+5. **H-106** — regime-stratified calibration helpers (primary metric per CONSTITUTION IV).
+6. **H-107** — plot helpers + threshold-analysis CSV (visual-first reporting parity with sibling).
+7. **H-202** — Adaptive Conformal Inference on offline output.
+8. **H-105** — NSGA-II HPO setup (after H-101 establishes split utilities).
+9. **H-102** — sample weighting (carefully, given SqrtBalanced double-count concern).
+10. **H-103** — undef-flag pattern.
+11. **H-111 / H-112 / H-114 / H-115** — sibling-borne feature groups.
+12. **H-203 / H-204 / H-205 / H-206 / H-207 / H-208** — online-stage refinements.
+
 ---
 
 ## Tier 1 — Streaming conformal coverage layer (asks 2 + 6, the project's differentiator)
@@ -155,6 +169,34 @@ The online stage is a streaming conformal layer providing conditional coverage. 
 ### H-044 [P3] Realized higher moments (bipower-corrected skew/kurtosis)
 - **Status**: queued
 
+### H-111 [P4] Group N — barrier-aware features (ported from sibling)
+- **Owner**: IMPLEMENTER
+- **Asks**: ask 1
+- **Mechanism**: this project's barrier construction `α = 0.00411` is a fixed economic threshold, exactly the regime where barrier-aware features (`barrier__z_tight = α / (σ·√M)`, `barrier__emax_ratio = σ·√(2 ln M) / α`, `vol__ratio_short_long`) carry information. Sibling implements them in `barrier_classifier/src/utils.py::compute_barrier_aware_features` (16 windows + 12 vol pairs). Port adapted to this project's `M=20` and `windows=[1,2,4,8,12,24,48,96]`.
+- **Status**: queued (high information density; adds ~50 features)
+- **Cost**: medium
+
+### H-112 [P4] Group O — excursion features (max drawup/drawdown, max-N-bar returns)
+- **Owner**: IMPLEMENTER
+- **Asks**: ask 1 — **label-aligned** features
+- **Mechanism**: rolling max drawup, max drawdown, max 1-bar / 2-bar returns. Label-aligned because `y_k` itself is a max-future excursion. Sibling: `compute_excursion_features` with chunked stride-trick implementation (avoid 9-window naive O(n·W)).
+- **Status**: queued
+- **Cost**: medium
+
+### H-114 [P4] Group C+ — volatility decomposition (bipower variation ratio, semivariance up/down/ratio, vol-of-vol)
+- **Owner**: IMPLEMENTER
+- **Asks**: ask 1
+- **Mechanism**: bipower variation = jumpiness proxy (`RV / BPV`); semivariance asymmetry (`SV_down / SV_up` semivolatility ratio); vol-of-vol (rolling std of rolling vol). Sibling: `compute_volatility_decomposition`. The semivariance ratio in particular is well-suited to this project's positive-skew label (only upper barrier).
+- **Status**: queued
+- **Cost**: medium
+
+### H-115 [P3] Permutation entropy (m=3, τ=1) — complexity / predictability
+- **Owner**: IMPLEMENTER
+- **Asks**: ask 1
+- **Mechanism**: Bandt-Pompe normalized permutation entropy on returns. Sibling: `compute_permutation_entropy` with stable mergesort tie-breaking.
+- **Status**: queued
+- **Cost**: low
+
 ---
 
 ## Tier 5 — Production engineering (ask 5)
@@ -168,6 +210,74 @@ The online stage is a streaming conformal layer providing conditional coverage. 
 
 ### H-054 [P3] Pre-commit hook running fast tests
 - **Status**: queued
+
+### H-105 [P5] NSGA-II multi-objective Optuna HPO with walk-forward CV (sibling import)
+- **Owner**: IMPLEMENTER
+- **Asks**: ask 5 — this project currently has NO hyperparameter optimization (`ENABLE_HPO=False` everywhere implicitly).
+- **Mechanism**: port the sibling's HPO pattern from `barrier_classifier/notebooks/03_model_training.ipynb`: NSGA-II sampler (objectives = minimize logloss, maximize PR-AUC), walk-forward CV across N folds (each fold's train precedes its val chronologically + embargo), per-trial seed variation (CB_SEED + trial.number), Pareto-frontier visualization, "best trial" selection rule (within 5% of min-logloss, take best PR-AUC), `HPO_DROP_OLDEST_FRAC` speed knob, ordered Pool with timestamp.
+- **Falsification**: a fresh HPO run + retrain produces metrics within ±5% of the legacy ROC=0.813 / Brier=0.090 (or beats them).
+- **Status**: queued
+- **Cost**: medium-high (45+ min wall-clock per HPO run; plan as `backtest`-budget round)
+
+### H-106 [P5] Regime-stratified calibration reporting (sibling import + adaptation)
+- **Owner**: IMPLEMENTER
+- **Asks**: ask 4 — primary metric per CONSTITUTION IV
+- **Mechanism**: port `compute_all_metrics`, `expected_calibration_error`, `calibration_by_regime`, `threshold_analysis` from sibling `src/utils.py`. Wire into `notebooks/offline_train.ipynb` and `notebooks/online_eval.ipynb`. Pick a fixed regime signal (proposal: `parkinson_var_rolling_mean_24` from this project's existing features) and run `pd.qcut(_, 3)` to get terciles. Output `RESEARCH/diagrams/round_NNN/calibration_by_regime.png` per round.
+- **Status**: queued
+- **Cost**: medium
+
+### H-107 [P4] Plot helpers + threshold-analysis CSV (sibling import for visual-first reporting)
+- **Owner**: IMPLEMENTER
+- **Asks**: ask 5 + visual-first CONSTITUTION rule
+- **Mechanism**: port `plot_calibration_curve`, `plot_calibration_by_regime`, `plot_feature_importance`, `plot_threshold_curves`, `plot_weight_profiles`, `plot_weight_distributions` from sibling. The `threshold_analysis.csv` output (precision, recall, trade-rate at sweep of thresholds) is missing from this project's eval artifacts.
+- **Status**: queued
+- **Cost**: low
+
+### H-108 [P4] CatBoostEnsemble wrapper class (sibling import)
+- **Owner**: IMPLEMENTER
+- **Asks**: ask 5
+- **Mechanism**: port the `CatBoostEnsemble` class (averages predictions / feature importances / best iterations across N seed-varied CatBoost models). Drop-in replacement for the ad-hoc model handling currently in `notebooks/offline_train.ipynb`. Saves cleanly + reloads via base+`.{i}.cbm` pattern.
+- **Status**: queued
+- **Cost**: low (~20 min)
+
+### H-113 [P3] CSCV — Probability of Backtest Overfit (López de Prado Ch. 11)
+- **Owner**: LITERATURE-SCOUT + IMPLEMENTER
+- **Asks**: ask 4 — overfitting check for any backtest-tagged round
+- **Mechanism**: combinatorially symmetric CV: split test into S equal slices, take all `(S choose S/2)` partitions, rank in-sample SR vs out-of-sample SR per partition; PBO = Pr[best IS ranks below median OOS]. Loop must report PBO whenever a round changes the strategy or hyperparameters. Reference: Bailey et al. (2014) `pseudo-mathematics-and-financial-charlatanism`.
+- **Status**: queued (depends on H-005 for at-least-one backtest data point)
+- **Cost**: medium
+
+---
+
+## Tier 6 — Sibling reference index
+
+The sibling `C:\Users\vitil\OneDrive\Desktop\barrier_classifier\` is the **read-only reference** for offline-stage practices. Specific practices already queued above as hypotheses:
+
+| Sibling artifact | Imported as | Status |
+|---|---|---|
+| `compute_barrier_distance_weight` (deep-loss exp upweight, soft cap) | H-102 | queued |
+| `compute_time_discount_weight` (geometric δ-decay with floor + cutoff) | H-102 | queued |
+| `compute_training_weights` (combined w_dist · w_time, effective-N) | H-102 | queued |
+| `chronological_split_with_embargo`, `walk_forward_cv` | H-101 + H-104 | queued |
+| `get_imputation_value`, `create_undef_flags_and_impute` (regex lookup) | H-103 | queued |
+| `CatBoostEnsemble` class | H-108 | queued |
+| NSGA-II Optuna HPO with walk-forward CV (notebook 03) | H-105 | queued |
+| `compute_all_metrics`, `expected_calibration_error`, `calibration_by_regime`, `threshold_analysis` | H-106 | queued |
+| `plot_calibration_curve`, `plot_feature_importance`, `plot_threshold_curves`, weight plots | H-107 | queued |
+| `compute_barrier_aware_features` (Group N) | H-111 | queued |
+| `compute_excursion_features` (Group O drawup/drawdown + maxret) | H-112 | queued |
+| `compute_volatility_decomposition` (bipower, semivar, vov) | H-114 | queued |
+| `compute_permutation_entropy` (Bandt-Pompe) | H-115 | queued |
+| `bootstrap_no_skill_pvalue`, `deflated_sharpe` (already in `src/backtest.py`) | done at bootstrap | accept |
+| `predict_with_decomposed_uq`, `predictive_intervals` (already in `src/uncertainty.py`) | done at bootstrap | accept |
+| `fit_conformal`, `predict_set`, `coverage_by_regime` (already in `src/conformal.py`) | done at bootstrap | accept |
+
+**Rule for sibling-import rounds**: don't blindly copy. Adapt to this project's:
+- `M=20` (sibling uses `M=10`); window sets differ
+- No EMBARGO (sibling has 60); per-segment burn-in uses `burn_in_bars=96` (sibling uses `K_WARMUP=144`)
+- Online stage = streaming conformal coverage (sibling has none of this)
+- `auto_class_weights=SqrtBalanced` interaction with sample weighting (H-102)
+- Existing notebook flow (sibling has `01_data_download / 02_feature_building / 03_model_training`, this project has `data_download / feature_build / offline_train / online_eval`)
 
 ---
 

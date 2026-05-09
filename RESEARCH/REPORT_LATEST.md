@@ -17,12 +17,15 @@ Regenerated at end of each round.
 ## Last 5 LEDGER entries
 - 2026-05-09 | 000 | bootstrap | infrastructure ported from sibling
 
-## Top 5 backlog
-1. **H-101 [P5]** Port labels + chronological-split + walk-forward-cv utilities (re-enables 2 test files)
-2. **H-102 [P5]** Port sample-weighting utilities + tests (re-enables 1 test file)
-3. **H-103 [P5]** Port feature pipeline + imputation + base-series utilities (re-enables 2 test files)
-4. **H-005 [P5]** Run inventory-aware backtest on existing offline+online stack — first PnL number
-5. **H-030 [P5]** River SRPClassifier vs ARF baseline (online ask 2 differentiator)
+## Round ordering (post-bootstrap, codified in BACKLOG)
+
+1. **H-005** — first PnL via `artifacts/online_eval/predictions.parquet` (already on disk; no port dependency)
+2. **H-201** — coverage baseline on existing ARF (measure-only)
+3. **H-108** — port CatBoostEnsemble class (cheap; unblocks ensemble work)
+4. **H-101** — label + split utilities (round-trip validation)
+5. **H-106** — regime-stratified calibration helpers (CONSTITUTION IV primary metric)
+
+Then in priority order: H-107 (plot helpers), H-202 (ACI), H-105 (NSGA-II HPO), H-102 (sample weighting), H-103 (undef flags), H-111..H-115 (sibling-borne features), H-203..H-208 (online-stage refinements).
 
 ## Architecture context (verified against `config/*.yaml` + `artifacts/offline_model/config_snapshot.json`)
 
