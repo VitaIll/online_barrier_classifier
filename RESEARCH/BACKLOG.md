@@ -26,7 +26,7 @@ Top of file = highest priority.
 - **Asks**: ask 5 (engineering hygiene)
 - **Mechanism**: extract the label construction (`y_k = 1[ ln(H_{k+1}/C_k) ≥ α ]` with α = 90%-train-quantile) and the chronological split (`train_fraction=0.6`, `val_fraction (of train)=0.2`) from `notebooks/feature_build.ipynb` and `notebooks/offline_train.ipynb` into `src/utils.py` as reusable callables. **Important**: this project has NO embargo, NO walk-forward CV in production — don't blindly port the sibling's utilities, only the parts that match this project's contract. Re-enable `tests/_pending/test_causality.py` and `test_splits.py` after adapting the tests to the actual semantics (no embargo expectations).
 - **Falsification**: round-trip — the new utilities reproduce the existing `dataset.parquet` labels and the existing `train/val/test` splits exactly when called with the current config.
-- **Status**: queued
+- **Status**: ACCEPTED round-004 — `src/utils.py` adds `compute_log_excursion`, `calibrate_alpha`, `construct_labels`, `chronological_split`, `chronological_split_indices`. 21 tests in `tests/test_label_split_utils.py` pass; round-trip on the persisted `bars_20m_features.parquet` (n=78,714) matches notebook cell-3 boundaries exactly (train_end=37,783; val_end=47,228). Parked sibling tests `test_causality.py`/`test_splits.py` retired — semantics didn't match (sibling had embargo + walk-forward; this project has neither). Diagnostic plot `RESEARCH/diagrams/round_004/split_window_visualization.png` shows train/val/test windows on the date axis with per-window positive rates (train p+=0.097, val p+=0.113, test p+=0.097). Unblocks H-105 (NSGA-II HPO needs these splits).
 - **Cost**: medium (~45 min, requires careful adaptation)
 
 ### H-102 [P4] Add sample-weighting utility *adapted* from sibling, with this project's primary metric in mind
@@ -78,7 +78,7 @@ Top of file = highest priority.
 1. ~~**H-005**~~ — ACCEPTED round-001.
 2. ~~**H-201**~~ — ACCEPTED round-002. Coverage baseline established; α=0.20 low-vol gap = -7.9pp is what H-202..H-208 must close.
 3. ~~**H-108**~~ — ACCEPTED round-003. `src/ensemble.py` lands; unblocks H-206.
-4. **H-101** — label + split utilities (round-trip validation).
+4. ~~**H-101**~~ — ACCEPTED round-004. Label + split utilities in `src/utils.py`; round-trip validated on persisted parquet; unblocks H-105.
 5. **H-106** — regime-stratified calibration helpers (primary metric per CONSTITUTION IV).
 6. **H-107** — plot helpers + threshold-analysis CSV (visual-first reporting parity with sibling).
 7. **H-202** — Adaptive Conformal Inference on offline output.

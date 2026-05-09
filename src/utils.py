@@ -252,3 +252,183 @@ def datetime_to_ts(dt: pd.Timestamp, unit: str = "ms") -> int:
     if unit == "us":
         return ns // 1_000
     raise ValueError(f"Unsupported unit: {unit}")
+
+
+# =============================================================================
+# LABEL CONSTRUCTION (matches notebooks/feature_build.ipynb cell 5 exactly)
+# =============================================================================
+#
+# Project contract: y_k = 1[ ln(H_{k+1} / C_k) >= alpha ] where H_{k+1} is the
+# high of the NEXT decision bar (not the current one), C_k is current bar's
+# close, and alpha is calibrated as the 90th-percentile of training-window
+# excursions. Labels are NaN when the next bar belongs to a different
+# `segment_id` (1-min gap separator) — those bars cannot be labeled because
+# the lookahead crosses a gap.
+#
+# This is the ONE canonical implementation. Notebooks should call these
+# helpers; do not re-implement inline.
+
+LOG_EXCURSION_COL = "log_excursion"
+NEXT_HIGH_COL = "next_high"
+NEXT_SEGMENT_COL = "next_segment_id"
+
+
+def compute_log_excursion(
+    bars_df: pd.DataFrame,
+    *,
+    high_col: str = "high",
+    close_col: str = "close",
+    segment_col: str = "segment_id",
+) -> pd.DataFrame:
+    """Add ``next_high``, ``next_segment_id``, and ``log_excursion`` columns.
+
+    `log_excursion[k] = ln(high[k+1] / close[k])` if the next bar is in the
+    same segment, else NaN. The two helper columns are kept on the returned
+    frame because callers (e.g. label construction, calibration) need them.
+
+    Returns a NEW DataFrame (does not mutate input).
+    """
+    out = bars_df.copy()
+    out[NEXT_HIGH_COL] = out[high_col].shift(-1)
+    out[NEXT_SEGMENT_COL] = out[segment_col].shift(-1)
+    out[LOG_EXCURSION_COL] = np.where(
+        out[segment_col] == out[NEXT_SEGMENT_COL],
+        np.log(out[NEXT_HIGH_COL] / out[close_col]),
+        np.nan,
+    )
+    return out
+
+
+def calibrate_alpha(
+    bars_df: pd.DataFrame,
+    train_fraction: float,
+    quantile: float = 0.9,
+    *,
+    excursion_col: str = LOG_EXCURSION_COL,
+) -> float:
+    """Calibrate the barrier ``alpha`` from the training window's excursions.
+
+    Matches the notebook contract: take the first ``int(N * train_fraction) - 1``
+    rows (the ``-1`` keeps a one-bar gap so the last calibration bar's
+    excursion does not look into the test window), drop NaN excursions, take
+    the requested quantile.
+
+    Raises ``RuntimeError`` if no valid excursions exist in the calibration
+    subset (typical cause: too-small dataframe, bad ``train_fraction``, or all
+    bars at gap boundaries).
+    """
+    if not (0.0 < train_fraction < 1.0):
+        raise ValueError(f"train_fraction must be in (0,1), got {train_fraction}")
+    if not (0.0 <= quantile <= 1.0):
+        raise ValueError(f"quantile must be in [0,1], got {quantile}")
+
+    train_end_idx = int(len(bars_df) * train_fraction)
+    calibration_df = bars_df.iloc[: max(train_end_idx - 1, 0)]
+    train_excursions = calibration_df[excursion_col].dropna()
+    if train_excursions.empty:
+        raise RuntimeError(
+            "No valid excursions in calibration subset. Check segment gaps, "
+            "date range, and train_fraction."
+        )
+    return float(train_excursions.quantile(quantile))
+
+
+def construct_labels(
+    bars_df: pd.DataFrame,
+    alpha: float,
+    *,
+    excursion_col: str = LOG_EXCURSION_COL,
+    label_col: str = "label",
+) -> pd.DataFrame:
+    """Materialize integer labels ``y_k = 1[log_excursion_k >= alpha]``.
+
+    NaN ``log_excursion`` (gap-crossing bars) yields NaN label — the caller
+    decides whether to drop or impute. Notebook cell 7 drops NaN labels and
+    casts the rest to int; this function preserves NaN so tests can verify
+    causality at the boundary.
+
+    Returns a NEW DataFrame (does not mutate input). Adds ``label`` column.
+    """
+    out = bars_df.copy()
+    out[label_col] = np.where(
+        out[excursion_col].notna(),
+        (out[excursion_col] >= alpha).astype(int),
+        np.nan,
+    )
+    return out
+
+
+# =============================================================================
+# CHRONOLOGICAL SPLIT (matches notebooks/offline_train.ipynb cell 3 exactly)
+# =============================================================================
+#
+# Project contract: NO embargo, NO walk-forward CV. The split is a single
+# chronological cut at `train_fraction * N`, then the last `val_fraction` of
+# the train window is carved off as validation.
+#
+# val_size formula (from the notebook):
+#   split_idx = int(N * train_fraction)
+#   val_size  = int(split_idx * val_fraction)   # NOT int(N * tf * vf)
+#
+# The two truncations can differ by 1 from a single-step computation; the
+# round-trip test in test_label_split_utils.py pins this exact behaviour.
+
+
+def chronological_split_indices(
+    n: int,
+    train_fraction: float = 0.6,
+    val_fraction: float = 0.2,
+) -> tuple[int, int]:
+    """Return ``(train_end, val_end)`` row indices for a chronological split.
+
+    Slicing ``df.iloc[:train_end]`` gives train; ``df.iloc[train_end:val_end]``
+    gives val; ``df.iloc[val_end:]`` gives test.
+
+    ``val_fraction`` is interpreted as the fraction of the **train window**
+    (not of the whole dataset) that becomes validation, matching the
+    notebook semantics. With ``train_fraction=0.6`` and ``val_fraction=0.2``,
+    the resulting splits are ~48% / ~12% / 40% of N.
+
+    Edge case: if the train window has fewer than 2 rows, no validation set
+    is carved (``train_end == val_end``).
+    """
+    if n < 0:
+        raise ValueError(f"n must be >= 0, got {n}")
+    if not (0.0 < train_fraction < 1.0):
+        raise ValueError(f"train_fraction must be in (0,1), got {train_fraction}")
+    if not (0.0 <= val_fraction < 1.0):
+        raise ValueError(f"val_fraction must be in [0,1), got {val_fraction}")
+
+    split_idx = int(n * train_fraction)
+    val_size = int(split_idx * val_fraction)
+    val_size = max(val_size, 1) if split_idx >= 2 else 0
+    if val_size > 0 and val_size < split_idx:
+        train_end = split_idx - val_size
+        val_end = split_idx
+    else:
+        train_end = split_idx
+        val_end = split_idx
+    return train_end, val_end
+
+
+def chronological_split(
+    df: pd.DataFrame,
+    train_fraction: float = 0.6,
+    val_fraction: float = 0.2,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Split ``df`` chronologically into ``(train, val, test)`` DataFrames.
+
+    See ``chronological_split_indices`` for the index math. The returned
+    DataFrames are independent copies (callers may mutate freely).
+
+    The relative order ``train.index < val.index < test.index`` holds when
+    the input has its natural row order — which is the notebook contract
+    (no shuffle).
+    """
+    train_end, val_end = chronological_split_indices(
+        len(df), train_fraction=train_fraction, val_fraction=val_fraction
+    )
+    train = df.iloc[:train_end].copy()
+    val = df.iloc[train_end:val_end].copy()
+    test = df.iloc[val_end:].copy()
+    return train, val, test
