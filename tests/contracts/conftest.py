@@ -3,11 +3,37 @@
 from __future__ import annotations
 
 import math
+import random
 from pathlib import Path
 
 import numpy as np
 import polars as pl
 import pytest
+
+
+# ---------------------------------------------------------------------------
+# Autouse: deterministic seeding for every test.
+#
+# Per the audit: pyproject pins `pytest-freezer` and we now also pin
+# `pytest-randomly` (the latter randomizes test ORDER to expose order-coupling
+# bugs). Both REQUIRE a global fixture that re-seeds Python's `random` and
+# numpy's legacy `np.random` at the start of every test, otherwise any code
+# path that uses unseeded RNGs is non-deterministic across reruns.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def seed_everything():
+    """Re-seed every entropy source at test start.
+
+    Why autouse: we want EVERY test to be deterministic-by-default. If a test
+    needs entropy, it can construct its own `np.random.default_rng(...)`. The
+    fixture only touches the global state — local generators are unaffected.
+    """
+    random.seed(0)
+    np.random.seed(0)
+    yield
+    # No teardown needed; the next test's seed_everything will re-seed.
 
 
 @pytest.fixture

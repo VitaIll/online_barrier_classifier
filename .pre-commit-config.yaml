@@ -1,0 +1,49 @@
+# Pre-commit hooks for wagie.
+#
+# Audit finding: the constitution forbids `git commit --no-verify` but there
+# was no hook to skip in the first place. This file fixes that. To install:
+#
+#     pip install pre-commit          # or: pip install -e ".[dev]"
+#     pre-commit install
+#
+# Then every `git commit` runs ruff + black + the no-bypass guard. To run on
+# the whole repo at any time: `pre-commit run --all-files`.
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(src/wagie|tests)/.*\.py$
+      - id: ruff-format
+        files: ^(src/wagie|tests)/.*\.py$
+
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        language_version: python3
+        files: ^(src/wagie|tests)/.*\.py$
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+
+  # Local hook: refuse to let the commit message reference --no-verify.
+  # Per CONSTITUTION.md, --no-verify is forbidden; if you find yourself wanting
+  # to bypass hooks, fix the underlying issue instead. This guard runs on the
+  # commit-msg stage, so it sees the message the user typed.
+  - repo: local
+    hooks:
+      - id: forbid-no-verify-in-commit-message
+        name: forbid --no-verify in commit message
+        entry: bash -c 'if grep -E -- "--no-verify|--no_verify|no.verify" "$1"; then echo "REFUSED: --no-verify is forbidden by CONSTITUTION.md. Fix the failing hook instead of skipping it."; exit 1; fi'
+        language: system
+        stages: [commit-msg]

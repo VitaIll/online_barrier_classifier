@@ -53,9 +53,11 @@ dev = [
     "pytest-cov>=4.0",
     "hypothesis>=6.100",
     "pytest-freezer>=0.4",
+    "pytest-randomly>=3.15",   # randomize test order to expose ordering bugs
     "ruff>=0.6",
     "black>=24.0",
     "coverage>=7.0",
+    "pre-commit>=3.6",
 ]
 
 [tool.setuptools.packages.find]
@@ -71,6 +73,11 @@ addopts = [
     "--tb=short",
     "-ra",
     "--ignore=tests/_pending",
+    # pytest-randomly: pin the test-order seed so order is reproducible across
+    # runs but still randomized w.r.t. file-declaration order. Override on the
+    # CLI with `--randomly-seed=...` to surface order-coupling bugs.
+    "-p", "randomly",
+    "--randomly-seed=0",
 ]
 markers = [
     "requires_data: test requires the cleansed Binance parquet (skipped if absent)",
@@ -83,17 +90,22 @@ markers = [
 [tool.coverage.run]
 branch = true
 source = ["src/wagie"]
+# Audit-driven: previously we omitted io/sources.py, features/bounded_batch.py,
+# pipeline/catboost_predictor.py — exactly the live ingestion + escape-hatch
+# + frozen-model boundaries. Coverage is now measured across them; only the
+# CLI entry point remains omitted (it's a thin argparse shim with no logic).
 omit = [
     "src/wagie/__main__.py",
-    "src/wagie/io/sources.py",
-    "src/wagie/features/bounded_batch.py",
-    "src/wagie/pipeline/catboost_predictor.py",
 ]
 
 [tool.coverage.report]
 precision = 1
 show_missing = true
 skip_covered = false
+# Enforced floor. The previous reading was 88.5% on the easy core; with the
+# omits removed, the realistic floor we can sustain is ~70% until escape-hatch
+# / catboost / live-source paths get their own contract tests.
+fail_under = 70
 exclude_also = [
     "raise NotImplementedError",
     "pragma: no cover",
