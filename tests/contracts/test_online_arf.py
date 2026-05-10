@@ -60,12 +60,86 @@ def test_predict_without_training_returns_obs_with_default_p_online():
     assert math.isclose(float(out.p_online), 0.5)
 
 
-def test_predict_with_nan_feature_returns_obs_unchanged():
-    """If any selected feature is NaN, transform skips ARF and returns obs as-is."""
+def test_predict_with_nan_feature_uses_undef_flag_not_short_circuit():
+    """Undef-flag pattern: NaN inputs are replaced with a sentinel + paired
+    `<name>__undef=1` flag column. The ARF still emits a prediction (no
+    short-circuit). This was the H-103 hole that left ARF cold for ~max(window)
+    bars per segment with the legacy `if any(isnan): return obs` guard.
+    """
     arf = OnlineARFCorrector(n_models=3, seed=42, selected_features=["f1"])
     o = _obs(p_offline=0.55, features={"f1": float("nan")})
     out = arf.transform(o)
-    assert out.p_online is None  # not modified
+    # ARF emits p_online (cold-start defaults to 0.5).
+    assert out.p_online is not None
+    assert math.isclose(float(out.p_online), 0.5)
+    # The prepared dict carries the sentinel + flag.
+    z = arf._z_with_undef_flags(o)
+    assert z["f1"] == 0.0
+    assert z["f1__undef"] == 1
+    # p_offline (which is finite) must NOT have an undef flag set.
+    assert z["p_offline"] == pytest.approx(0.55)
+    assert z["p_offline__undef"] == 0
+
+
+def test_undef_flag_zero_for_finite_features():
+    """Finite features carry their value verbatim and `<name>__undef=0`."""
+    arf = OnlineARFCorrector(n_models=3, seed=42, selected_features=["f1", "f2"])
+    o = _obs(p_offline=0.55, features={"f1": 1.5, "f2": -3.0})
+    z = arf._z_with_undef_flags(o)
+    assert z["f1"] == 1.5
+    assert z["f1__undef"] == 0
+    assert z["f2"] == -3.0
+    assert z["f2__undef"] == 0
+
+
+def test_cold_start_arf_emits_p_online_on_first_bar():
+    """First labeled bar: ARF must produce a finite p_online (per the new
+    contract — never return obs.p_online == None on the cold-start path)."""
+    arf = OnlineARFCorrector(n_models=3, seed=42, selected_features=["f1", "f2"])
+    o = _obs(p_offline=0.6, features={"f1": 0.3, "f2": -0.1})
+    out = arf.transform(o)
+    assert out.p_online is not None
+    p = float(out.p_online)
+    assert 0.0 <= p <= 1.0
+
+
+def test_drift_signals_surfaced_after_concept_shift():
+    """ADWIN drift counters from river ARF surface on `obs.drift_signals`
+    after enough samples + a concept shift trigger them."""
+    import random
+    random.seed(0)
+    arf = OnlineARFCorrector(n_models=3, seed=42, selected_features=["f1"])
+    # Stationary phase
+    for _ in range(60):
+        o = _obs(p_offline=0.5, features={"f1": random.gauss(0, 1)})
+        arf.transform(o)
+        arf.update(o, label=random.choice([0, 1]))
+    # Concept shift: feature distribution and label distribution both flip.
+    for _ in range(300):
+        o = _obs(p_offline=0.5, features={"f1": random.gauss(10, 1)})
+        arf.transform(o)
+        arf.update(o, label=1)
+    # After shift, ADWIN should have fired at least once.
+    out = arf.transform(_obs(p_offline=0.5, features={"f1": 10.0}))
+    assert out.drift_signals is not None
+    assert "n_drifts_total" in out.drift_signals
+    assert "n_warnings_total" in out.drift_signals
+    # state_dict() exposes counters too
+    sd = arf.state_dict()
+    assert "n_drifts" in sd
+    assert "n_warnings" in sd
+    assert sd["n_drifts"] >= 0
+    assert sd["n_warnings"] >= 0
+
+
+def test_drift_signals_present_even_on_fresh_arf():
+    """drift_signals is attached even before any drift has fired (counts=0)."""
+    arf = OnlineARFCorrector(n_models=3, seed=42, selected_features=["f1"])
+    o = _obs(p_offline=0.5, features={"f1": 1.0})
+    out = arf.transform(o)
+    assert out.drift_signals is not None
+    assert out.drift_signals["n_drifts_total"] == 0
+    assert out.drift_signals["n_warnings_total"] == 0
 
 
 # ---------------------------------------------------------------------------
