@@ -30,6 +30,10 @@ class ExitReason(StrEnum):
     TIMEOUT = "timeout"
     MANUAL = "manual"        # closed via Action.close
     OPERATOR = "operator"    # closed via TradingConsole
+    BATCHED_WINNER = "batched_winner"   # swept-out profitable position when a
+                                         # sibling on the same instrument hit TP
+    SAFETY_CAP = "safety_cap"            # broker hard hold-age safety net (NOT
+                                         # a strategy decision; see SimBroker)
 
 
 class ActionKind(StrEnum):

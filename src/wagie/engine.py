@@ -69,6 +69,7 @@ class EngineResult:
     # captured each time the LabelBuffer emits a matured prediction-label pair.
     # These feed MetricsBattery (Brier / ECE / per-regime calibration).
     p_online_history: list[float] = field(default_factory=list)
+    p_offline_history: list[float] = field(default_factory=list)  # raw offline for drift diagnostics
     label_history: list[int] = field(default_factory=list)
     regime_history: list[int] = field(default_factory=list)
     # Audit-fix counters (replace silently-swallowed errors with visible totals).
@@ -76,6 +77,20 @@ class EngineResult:
     n_drifts: int = 0                # DriftDetected events observed
     n_checkpoints: int = 0           # successful checkpoint_callback invocations
     graceful_shutdown: bool = False  # SIGTERM/SIGINT trapped, final ckpt written
+    # Per-bar strategy-state trace. Populated when the active strategy
+    # implements ``get_state() -> dict`` exposing the keys
+    # {tau, r_hat, r_star, paused, sigma_ve, inv_size, hold_age_max}.
+    # Empty for legacy strategies that don't implement get_state.
+    tau_history: list[float] = field(default_factory=list)
+    r_hat_ewma_history: list[float] = field(default_factory=list)
+    r_star_ewma_history: list[float] = field(default_factory=list)
+    paused_history: list[bool] = field(default_factory=list)
+    sigma_ve_history: list[float] = field(default_factory=list)
+    inventory_size_history: list[int] = field(default_factory=list)
+    hold_age_max_history: list[int] = field(default_factory=list)
+    # Optional warmup calibration snapshot — strategies that pre-fit
+    # calibrators during a warmup window expose the snapshot dict here.
+    warmup_calibration: Optional[dict] = None
 
     @property
     def fills(self) -> list[BarrierTouched]:
@@ -134,6 +149,7 @@ class Engine:
         self._n_seen = 0
         # Streaming calibration trace, populated when matured labels arrive.
         self._p_online_history: list[float] = []
+        self._p_offline_history: list[float] = []
         self._label_history: list[int] = []
         self._regime_history: list[int] = []
         self._stop_requested = False
@@ -141,6 +157,21 @@ class Engine:
         self._last_checkpoint_at = 0  # _n_decisions at last checkpoint
         # Cumulative drift counters (for per-bar delta -> DriftDetected events)
         self._drift_totals_prev: dict[str, int] = {}
+        # Per-bar strategy-state collection (additive). Populated only when
+        # the active strategy implements ``get_state() -> dict``.
+        self._tau_history: list[float] = []
+        self._r_hat_ewma_history: list[float] = []
+        self._r_star_ewma_history: list[float] = []
+        self._paused_history: list[bool] = []
+        self._sigma_ve_history: list[float] = []
+        self._inventory_size_history: list[int] = []
+        self._hold_age_max_history: list[int] = []
+        # Cache the strategy stage (last stage in the pipeline). The Pipeline
+        # validator guarantees the last stage has kind == STRATEGY.
+        try:
+            self._strategy_stage = self.pipeline.stages[-1]
+        except (AttributeError, IndexError):
+            self._strategy_stage = None
 
     def request_stop(self) -> None:
         """Set the stop flag — the next tick after this call exits the loop.
@@ -206,6 +237,21 @@ class Engine:
         # Drain broker events into engine's event log
         if self.capture_events:
             self._events.extend(getattr(self.broker, "events", []))
+        # Pull optional warmup calibration snapshot from the strategy if exposed.
+        warmup_calibration: Optional[dict] = None
+        if self._strategy_stage is not None:
+            wc = getattr(self._strategy_stage, "warmup_calibration", None)
+            if callable(wc):
+                try:
+                    wc = wc()
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        "strategy.warmup_calibration() raised %s: %s",
+                        type(exc).__name__, exc,
+                    )
+                    wc = None
+            if isinstance(wc, dict):
+                warmup_calibration = dict(wc)
         return EngineResult(
             ledger=ledger,
             n_decisions=self._n_decisions,
@@ -219,12 +265,21 @@ class Engine:
             audit=self._audit,
             events=self._events,
             p_online_history=list(self._p_online_history),
+            p_offline_history=list(self._p_offline_history),
             label_history=list(self._label_history),
             regime_history=list(self._regime_history),
             n_stage_errors=self._n_stage_errors,
             n_drifts=self._n_drifts,
             n_checkpoints=self._n_checkpoints,
             graceful_shutdown=self._graceful_shutdown,
+            tau_history=list(self._tau_history),
+            r_hat_ewma_history=list(self._r_hat_ewma_history),
+            r_star_ewma_history=list(self._r_star_ewma_history),
+            paused_history=list(self._paused_history),
+            sigma_ve_history=list(self._sigma_ve_history),
+            inventory_size_history=list(self._inventory_size_history),
+            hold_age_max_history=list(self._hold_age_max_history),
+            warmup_calibration=warmup_calibration,
         )
 
     def _maybe_checkpoint(self, *, final: bool = False) -> None:
@@ -289,6 +344,15 @@ class Engine:
                 if p_prev is not None:
                     try:
                         self._p_online_history.append(float(p_prev))
+                        # Also capture p_offline (when present) for drift diagnostics
+                        po_prev = getattr(obs_prev, "p_offline", None)
+                        if po_prev is not None:
+                            try:
+                                self._p_offline_history.append(float(po_prev))
+                            except (TypeError, ValueError):
+                                self._p_offline_history.append(float("nan"))
+                        else:
+                            self._p_offline_history.append(float("nan"))
                         self._label_history.append(int(y_prev))
                         r = obs_prev.regime_id
                         self._regime_history.append(int(r) if r is not None else -1)
@@ -312,6 +376,9 @@ class Engine:
                     extra={"stage_name": exc.stage_name, "op": exc.op,
                            "context": exc.context, "phase": "warmup"},
                 )
+            else:
+                # Strategy may have decided() during warmup transform_one.
+                self._collect_strategy_state()
             self._n_skipped_warmup += 1
             return
 
@@ -331,6 +398,9 @@ class Engine:
                        "context": exc.context, "phase": "predict"},
             )
             return
+
+        # 6a. Per-bar strategy state collection (after decide()).
+        self._collect_strategy_state()
 
         # 6b. Surface drift signals as DriftDetected events when totals advance.
         if obs.drift_signals and self.capture_events:
@@ -412,6 +482,66 @@ class Engine:
             clock_ns=ts.ns,
             risk_engine_view=self.risk_engine.policy_names,
         )
+
+    def _collect_strategy_state(self) -> None:
+        """Append per-bar strategy state to the history lists.
+
+        Strategies opt-in by implementing ``get_state() -> dict`` returning
+        any subset of the keys ``tau, r_hat, r_star, paused, sigma_ve,
+        inv_size, hold_age_max``. Strategies without ``get_state`` are
+        ignored — backwards-compatible.
+
+        Missing keys default to NaN (floats), False (paused), and 0
+        (integer counts) so the lists stay aligned with the bar index.
+        """
+        stage = self._strategy_stage
+        if stage is None:
+            return
+        get_state = getattr(stage, "get_state", None)
+        if get_state is None or not callable(get_state):
+            return
+        try:
+            state = get_state() or {}
+        except Exception as exc:  # noqa: BLE001 - per-bar collection must not crash run
+            logger.debug(
+                "strategy.get_state() raised %s: %s — skipping this bar",
+                type(exc).__name__, exc,
+            )
+            return
+        if not isinstance(state, dict):
+            logger.debug(
+                "strategy.get_state() returned %s, not dict — skipping",
+                type(state).__name__,
+            )
+            return
+
+        def _f(key: str) -> float:
+            try:
+                v = state.get(key)
+                return float(v) if v is not None else float("nan")
+            except (TypeError, ValueError):
+                return float("nan")
+
+        def _b(key: str) -> bool:
+            try:
+                return bool(state.get(key, False))
+            except (TypeError, ValueError):
+                return False
+
+        def _i(key: str) -> int:
+            try:
+                v = state.get(key, 0)
+                return int(v) if v is not None else 0
+            except (TypeError, ValueError):
+                return 0
+
+        self._tau_history.append(_f("tau"))
+        self._r_hat_ewma_history.append(_f("r_hat"))
+        self._r_star_ewma_history.append(_f("r_star"))
+        self._paused_history.append(_b("paused"))
+        self._sigma_ve_history.append(_f("sigma_ve"))
+        self._inventory_size_history.append(_i("inv_size"))
+        self._hold_age_max_history.append(_i("hold_age_max"))
 
 
 __all__ = ["Engine", "EngineResult"]

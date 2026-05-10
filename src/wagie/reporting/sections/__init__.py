@@ -171,8 +171,11 @@ def _autoload_builtin_sections() -> None:
     for mod in (
         "wagie.reporting.sections.overview",
         "wagie.reporting.sections.calibration",
+        "wagie.reporting.sections.controller",   # adaptive-threshold controller (order=15)
         "wagie.reporting.sections.trading",
+        "wagie.reporting.sections.inventory",     # inventory + hold-age (order=25)
         "wagie.reporting.sections.operational",
+        "wagie.reporting.sections.drift",         # rolling Brier drift monitor (order=35)
         "wagie.reporting.sections.coverage",
         "wagie.reporting.sections.spec",
     ):

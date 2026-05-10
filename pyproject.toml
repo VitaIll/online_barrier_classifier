@@ -53,6 +53,7 @@ wagie = "wagie.__main__:main"
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "pytest-xdist>=3.0",       # parallel test execution; ~3x speedup on full suite
     "hypothesis>=6.100",
     "pytest-freezer>=0.4",
     "pytest-randomly>=3.15",   # randomize test order to expose ordering bugs
@@ -80,6 +81,13 @@ addopts = [
     # CLI with `--randomly-seed=...` to surface order-coupling bugs.
     "-p", "randomly",
     "--randomly-seed=0",
+    # pytest-xdist: parallel execution. `auto` uses all logical cores.
+    # `--dist=loadfile` keeps tests from one file on the same worker so
+    # module-level fixtures aren't recomputed across workers. Full suite
+    # drops from ~275s sequential to ~90s on a 16-core box.
+    # Override for single-test debugging with `pytest -n 0 ...` to run inline.
+    "-n", "auto",
+    "--dist=loadfile",
 ]
 markers = [
     "requires_data: test requires the cleansed Binance parquet (skipped if absent)",

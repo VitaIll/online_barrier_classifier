@@ -158,24 +158,29 @@ def test_long_both_in_same_minute_sl_wins():
     assert closed.close_reason == ExitReason.SL
 
 
-def test_long_no_touch_timeout_at_last_minute_close():
+def test_long_no_touch_does_not_force_close_at_vertical_barrier():
+    """Regression: the broker no longer force-closes at expiry_ts.
+
+    Strategy now owns hold-age decisions via Action.close. With no TP/SL
+    touch on a bar past the vertical barrier the position stays open —
+    the broker only closes via barriers, strategy actions, or its hard
+    MAX_HOLD_BARS safety net.
+    """
     base = 1_700_000_000_000
-    # Use M-min expiry so the second bar's close_time triggers timeout
+    # Use M-min expiry so the second bar's close_time exceeds expiry_ts
     bro = SimBroker(m_minutes=M, cost=0.0)
     pid, activation_close = _open_long_and_activate(bro, base)
-    # Next bar: completely flat — no TP/SL touch. expiry == activation_close,
-    # which is <= bar.close_time, so TIMEOUT fires at last_minute.close.
+    # Next bar: completely flat — no TP/SL touch.
     next_base = base + M * 60_000
     minutes = [_flat_minute(next_base, i) for i in range(M)]
     bar2 = _build_bar(next_base, minutes)
+    pos_before = bro.portfolio().get(pid)
+    assert pos_before.expiry_ts <= bar2.close_time   # vertical barrier crossed
     bro.advance_to(bar2.close_time, bar2)
-    closed = bro.portfolio().get(pid)
-    assert closed.closed is True
-    assert closed.close_reason == ExitReason.TIMEOUT
+    pos_after = bro.portfolio().get(pid)
+    assert pos_after.closed is False                 # broker did NOT force-close
     fills = list(bro.fills())
-    assert fills[-1].reason == ExitReason.TIMEOUT
-    last_min = minutes[-1]
-    assert abs(float(fills[-1].exit_price) - float(last_min.close)) < 1e-9
+    assert all(int(f.order_id) != int(pid) for f in fills)   # no fill emitted
 
 
 def test_entry_minute_excluded_when_pos_opens_in_same_bar():
@@ -356,8 +361,11 @@ def test_no_stop_branch_position_carries_inf_sl():
     bar2 = _build_bar(next_base, minutes)
     bro.advance_to(bar2.close_time, bar2)
     closed = bro.portfolio().get(pid)
-    # Must hit timeout (or stay open if expiry not yet exceeded).
+    # SL branch must NOT have fired. Without a SL and without a TP touch,
+    # the broker no longer force-closes at expiry — the position stays open
+    # until strategy issues a close (or the hard MAX_HOLD_BARS safety net).
     assert closed.close_reason != ExitReason.SL
+    assert closed.closed is False
 
 
 def test_no_stop_then_tp_still_fires():

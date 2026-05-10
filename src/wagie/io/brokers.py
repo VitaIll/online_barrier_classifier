@@ -15,6 +15,19 @@ ambiguous; configurable via `tie_break`:
     - "probabilistic_hl_bridge": Bernoulli(0.5) per collision (deterministic
       seed via the bar's open timestamp). Treats both barriers as equiprobable
       first-touches when path inside the minute is unknown.
+
+Hold-age policy — the strategy is responsible for deciding when to close
+positions that have not hit a barrier (via Action.close in response to its
+own t_max policy). The broker no longer force-closes at the vertical
+barrier. As a defensive safety net only, positions are hard-closed once
+they've been held longer than `MAX_HOLD_BARS` decision bars (with reason
+ExitReason.SAFETY_CAP) so a buggy strategy cannot leak a position forever.
+
+Batched winners on TP — when a position is closed by a TP barrier touch,
+the broker also sweeps every other open position on the same instrument
+and closes any that are profitable net of round-trip cost (with reason
+ExitReason.BATCHED_WINNER). SL touches do NOT trigger any sweep — losers
+remain individual.
 """
 
 from __future__ import annotations
@@ -65,6 +78,14 @@ class _CostSpec:
 TieBreak = Literal[
     "pessimistic_sl_first", "optimistic_tp_first", "probabilistic_hl_bridge"
 ]
+
+
+# Hard safety net: positions held longer than this many decision bars are
+# force-closed by the broker (with reason ExitReason.SAFETY_CAP). This is
+# NOT a strategy decision — the strategy is responsible for hold-age via
+# Action.close in response to its own t_max policy. The cap exists only so
+# a buggy or stalled strategy cannot leak a position forever.
+MAX_HOLD_BARS: int = 10_000
 
 
 @dataclass
@@ -392,8 +413,22 @@ class SimBroker:
                     still_pending.append(ps)
             self._pending_scale_ins = still_pending
 
-        # Step B: walk minutes; first-touch on every open position
+        # Step B: walk minutes; first-touch on every open position.
+        #
+        # Hold-age policy: we no longer force-close at the vertical barrier
+        # (pos.expiry_ts <= bar.close_time). The strategy is now responsible
+        # for hold-age via Action.close in response to its own t_max policy.
+        # MAX_HOLD_BARS below is a defensive safety net only.
+        #
+        # Batched winners on TP: when a TP fires, _sweep_winners closes any
+        # other open position on the same instrument that is currently
+        # profitable net of round-trip cost. Tracked via `swept_in_loop` so
+        # the outer iteration doesn't try to rescan a position the sweep
+        # already closed. Sweeps NEVER fire on SL — losers stay individual.
+        swept_in_loop: set = set()
         for pos_id in list(self._portfolio.positions.keys()):
+            if pos_id in swept_in_loop:
+                continue
             pos = self._portfolio.get(pos_id)
             if pos is None or pos.closed:
                 continue
@@ -415,6 +450,9 @@ class SimBroker:
                 # opened in this bar; scan after entry minute
                 scan_start = max(0, self.execution_latency_minutes)
             exited = False
+            exited_reason: Optional[ExitReason] = None
+            exit_minute: Optional[MinuteBar] = None
+            exit_price_used: float = 0.0
             for i in range(scan_start, len(minutes)):
                 mb = minutes[i]
                 hi, lo = float(mb.high), float(mb.low)
@@ -430,23 +468,50 @@ class SimBroker:
                     )
                     self._barrier_close(pos, mb, reason, exit_px, ts)
                     exited = True
+                    exited_reason = reason
+                    exit_minute = mb
+                    exit_price_used = exit_px
                     break
                 if sl_hit:
                     self._barrier_close(pos, mb, ExitReason.SL, sl_price, ts)
                     exited = True
+                    exited_reason = ExitReason.SL
+                    exit_minute = mb
+                    exit_price_used = sl_price
                     break
                 if tp_hit:
                     self._barrier_close(pos, mb, ExitReason.TP, tp_price, ts)
                     exited = True
+                    exited_reason = ExitReason.TP
+                    exit_minute = mb
+                    exit_price_used = tp_price
                     break
             if exited:
                 new_fills.append(self._closed_history[-1])
+                # On TP (including tie-break-resolved TP), sweep all other
+                # profitable positions on the same instrument. SL never
+                # triggers a sweep — losers stay individual.
+                if exited_reason == ExitReason.TP and exit_minute is not None:
+                    swept = self._sweep_winners(
+                        instrument=pos.instrument,
+                        current_price=exit_price_used,
+                        last_minute_bar=exit_minute,
+                        ts=ts,
+                    )
+                    for sp in swept:
+                        swept_in_loop.add(sp.position_id)
+                        new_fills.append(self._closed_history[-1])
                 continue
-            # Not exited via barriers; check expiry
-            if pos.expiry_ts <= bar.close_time:
-                # Find the minute closest to expiry in this bar
+            # Not exited via barriers; the broker's hard MAX_HOLD_BARS safety
+            # net catches positions that would otherwise leak. Strategy owns
+            # ordinary hold-age via Action.close — this is purely defensive.
+            bar_minutes_ns = Duration.from_minutes(self.m_minutes).ns or 1
+            bars_held = max(
+                0, int((bar.close_time - pos.open_ts).ns // bar_minutes_ns)
+            )
+            if bars_held > MAX_HOLD_BARS:
                 last_mb = minutes[-1]
-                self._barrier_close(pos, last_mb, ExitReason.TIMEOUT,
+                self._barrier_close(pos, last_mb, ExitReason.SAFETY_CAP,
                                     float(last_mb.close), ts)
                 new_fills.append(self._closed_history[-1])
                 continue
@@ -514,6 +579,49 @@ class SimBroker:
         )
         self._closed_history.append(fill)
         self._emit_close_event(new_pos, reason, mb.close_time)
+
+    def _sweep_winners(
+        self,
+        *,
+        instrument: InstrumentId,
+        current_price: float,
+        last_minute_bar: MinuteBar,
+        ts: Timestamp,
+    ) -> list[Position]:
+        """Close any other open position on `instrument` that's currently
+        profitable net of round-trip cost, marking them BATCHED_WINNER.
+
+        Called immediately after a TP-triggered _barrier_close. The original
+        TP-closed position is already closed, so it is naturally skipped by
+        the open-positions filter. Returns the (pre-close) Position objects
+        that were swept, so the caller can update its bookkeeping.
+
+        Profitability check: log-PnL of closing at `current_price` minus the
+        round-trip cost (2 * per-side cost). A small buffer of 10 % of the
+        per-side cost is added to avoid sweeping positions whose net PnL is
+        within numerical noise of break-even.
+        """
+        if not (math.isfinite(current_price) and current_price > 0):
+            return []
+        closed: list[Position] = []
+        for pos in self._portfolio.positions_for(instrument):
+            ep = float(pos.avg_entry_price)
+            if not (math.isfinite(ep) and ep > 0):
+                continue
+            mark_log = math.log(current_price / ep)
+            side_sign = 1.0 if pos.side == Side.LONG else -1.0
+            size_f = float(pos.current_size)
+            cost_per_side = self._cost_log_for(size_f)
+            net_pnl_log = (mark_log * side_sign * size_f
+                           - 2.0 * cost_per_side * size_f)
+            eps = cost_per_side * 0.1 * size_f
+            if net_pnl_log > eps:
+                self._barrier_close(
+                    pos, last_minute_bar, ExitReason.BATCHED_WINNER,
+                    current_price, ts,
+                )
+                closed.append(pos)
+        return closed
 
     def _emit_close_event(self, pos: Position, reason: ExitReason, ts: Timestamp) -> None:
         cost_log = self._cost_log_for(float(pos.open_size))

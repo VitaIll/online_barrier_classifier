@@ -262,6 +262,8 @@ def test_to_dict_contains_all_top_level_keys() -> None:
         "sharpe_ci", "brier_ci", "ece_ci", "roc_ci_delong", "pr_ci",
         "n_trials", "dsr", "pbo",
         "accepted", "blocked_reasons",
+        # Adaptive-threshold strategy extension (additive — round-NEW).
+        "controller", "drift", "inventory", "warmup_calibration",
     }
     assert set(d.keys()) == expected_keys
 

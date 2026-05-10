@@ -81,8 +81,11 @@ class ModelConfig(BaseModel):
 
 
 class StrategyConfig(BaseModel):
-    kind: Literal["threshold_gate", "pure_conformal", "ev_calibrated_size"] = "threshold_gate"
-    tau: float = 0.50
+    kind: Literal[
+        "threshold_gate", "pure_conformal", "ev_calibrated_size",
+        "composite_adaptive",
+    ] = "threshold_gate"
+    tau: Optional[float] = 0.50  # nullable for composite_adaptive (controller-driven)
     k: Optional[float] = None
     extra: dict = Field(default_factory=dict)
 

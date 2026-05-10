@@ -89,6 +89,15 @@ class MetricsReport:
     accepted: bool = True
     blocked_reasons: list[str] = field(default_factory=list)
 
+    # Adaptive-threshold strategy extension (additive). All four blocks are
+    # populated by ``MetricsBattery.compute`` from EngineResult per-bar arrays
+    # when present; they stay None for legacy strategies that don't expose
+    # controller / inventory state.
+    controller: Optional[dict] = None        # {tau_traj, r_hat_traj, r_star_traj, pause_spans, sigma_ve_dist, sigma_max}
+    drift: Optional[dict] = None             # {brier_offline_rolling, brier_online_rolling, baseline_brier, rolling_window}
+    inventory: Optional[dict] = None         # {size_traj, hold_age_max_traj}
+    warmup_calibration: Optional[dict] = None  # pass-through from EngineResult.warmup_calibration
+
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -202,6 +211,14 @@ class MetricsBattery:
             # DSR auto-invocation when n_trials > 1.
             if n_trials_eff > 1:
                 rep.dsr = self._dsr(tm, n_trials_eff)
+
+        # Adaptive-threshold strategy extension blocks (additive).
+        # Each block returns None when no relevant per-bar arrays are present
+        # so legacy strategies don't pollute the JSON with empty dicts.
+        rep.controller = _build_controller_block(result)
+        rep.drift = _build_drift_block(result, p_pred=p_pred, y_true=y_true)
+        rep.inventory = _build_inventory_block(result)
+        rep.warmup_calibration = _build_warmup_calibration_block(result)
 
         # CSCV PBO + median IS-best — only when caller passed a strategies-by-
         # periods returns matrix (n_strategies >= 2). The single-EngineResult
@@ -367,6 +384,140 @@ class MetricsBattery:
             return float(p_dsr)
         except (ValueError, ZeroDivisionError):
             return None
+
+
+# ============================================================================
+# Adaptive-threshold strategy extension blocks (additive)
+# ============================================================================
+
+
+def _pause_spans(paused_history: Sequence[bool]) -> list[tuple[int, int]]:
+    """Run-length encode True spans in a bool series.
+
+    Returns list of (start, end_exclusive) for each contiguous True run.
+    """
+    spans: list[tuple[int, int]] = []
+    n = len(paused_history)
+    i = 0
+    while i < n:
+        if paused_history[i]:
+            j = i + 1
+            while j < n and paused_history[j]:
+                j += 1
+            spans.append((i, j))
+            i = j
+        else:
+            i += 1
+    return spans
+
+
+def _build_controller_block(result: "EngineResult") -> Optional[dict]:
+    """Build the controller block from per-bar history arrays.
+
+    Returns None when none of the controller-related arrays are populated.
+    """
+    tau = list(getattr(result, "tau_history", []) or [])
+    rhat = list(getattr(result, "r_hat_ewma_history", []) or [])
+    rstar = list(getattr(result, "r_star_ewma_history", []) or [])
+    paused = list(getattr(result, "paused_history", []) or [])
+    sigma = list(getattr(result, "sigma_ve_history", []) or [])
+    if not (tau or rhat or rstar or paused or sigma):
+        return None
+    return {
+        "tau_traj": tau,
+        "r_hat_traj": rhat,
+        "r_star_traj": rstar,
+        "pause_spans": _pause_spans(paused),
+        "sigma_ve_dist": sigma,
+        "sigma_max": (max(sigma) if sigma else None),
+    }
+
+
+def _rolling_brier(
+    p: Sequence[float], y: Sequence[int], window: int,
+) -> list[float]:
+    """Rolling Brier mean over ``window`` bars, NaN-padded to align with input.
+
+    Output length equals ``len(p)``. Position i contains the Brier of
+    indices [i-window+1 .. i] inclusive when i >= window-1, else NaN.
+    """
+    import math
+    n = len(p)
+    out = [math.nan] * n
+    if n == 0 or window <= 0:
+        return out
+    # Cumulative sum of squared error for O(n) rolling mean.
+    csum = [0.0] * (n + 1)
+    for i in range(n):
+        e = float(p[i]) - float(y[i])
+        csum[i + 1] = csum[i] + e * e
+    for i in range(window - 1, n):
+        out[i] = (csum[i + 1] - csum[i + 1 - window]) / float(window)
+    return out
+
+
+def _build_drift_block(
+    result: "EngineResult",
+    *, p_pred: Optional[Sequence[float]] = None,
+    y_true: Optional[Sequence[int]] = None,
+    rolling_window: int = 1000,
+) -> Optional[dict]:
+    """Build the drift block: rolling Brier of online (and offline if present).
+
+    Returns None when no calibration history is available.
+    """
+    if p_pred is None:
+        p_pred = getattr(result, "p_online_history", []) or []
+    if y_true is None:
+        y_true = getattr(result, "label_history", []) or []
+    p_list = list(p_pred)
+    y_list = list(y_true)
+    if not p_list or not y_list:
+        return None
+    n = min(len(p_list), len(y_list))
+    p_list = p_list[:n]
+    y_list = y_list[:n]
+    rolling_online = _rolling_brier(p_list, y_list, rolling_window)
+    # baseline_brier = single-shot Brier across full matured trace
+    if n > 0:
+        sq_sum = sum((float(pi) - float(yi)) ** 2 for pi, yi in zip(p_list, y_list))
+        baseline = sq_sum / float(n)
+    else:
+        baseline = None
+    # Offline rolling — if EngineResult ever gains a p_offline_history field,
+    # populate symmetrically. For now: stays empty (not None) when absent.
+    p_offline = list(getattr(result, "p_offline_history", []) or [])
+    if p_offline and len(p_offline) >= n:
+        rolling_offline = _rolling_brier(p_offline[:n], y_list, rolling_window)
+    else:
+        rolling_offline = []
+    return {
+        "brier_online_rolling": rolling_online,
+        "brier_offline_rolling": rolling_offline,
+        "baseline_brier": baseline,
+        "rolling_window": int(rolling_window),
+    }
+
+
+def _build_inventory_block(result: "EngineResult") -> Optional[dict]:
+    size = list(getattr(result, "inventory_size_history", []) or [])
+    age = list(getattr(result, "hold_age_max_history", []) or [])
+    if not (size or age):
+        return None
+    return {
+        "size_traj": size,
+        "hold_age_max_traj": age,
+    }
+
+
+def _build_warmup_calibration_block(result: "EngineResult") -> Optional[dict]:
+    """Pass through warmup_calibration with a defensive copy."""
+    wc = getattr(result, "warmup_calibration", None)
+    if wc is None:
+        return None
+    if isinstance(wc, dict):
+        return dict(wc)
+    return wc
 
 
 __all__ = [

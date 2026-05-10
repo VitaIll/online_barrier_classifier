@@ -84,6 +84,11 @@ class Observation:
     regime_id: Optional[int] = None
     actions: tuple = field(default_factory=tuple)   # tuple[Action, ...]
     drift_signals: Optional[Mapping[str, int]] = None
+    # Virtual-ensemble uncertainty: std across ensemble members produced by
+    # the online layer's bagged trees. None when the upstream stage doesn't
+    # expose ensemble dispersion. Surfaced for the new strategy that gates
+    # on sigma_ve > sigma_max as a pause condition.
+    sigma_ve: Optional[float] = None
 
     @property
     def as_of(self) -> Timestamp:
@@ -118,6 +123,10 @@ class Observation:
     def with_drift_signals(self, signals: Mapping[str, int]) -> "Observation":
         """Attach per-iteration drift signals (counts) emitted by online stages."""
         return dataclasses.replace(self, drift_signals=dict(signals))
+
+    def with_sigma_ve(self, value: float) -> "Observation":
+        """Attach the virtual-ensemble standard deviation (sigma_ve)."""
+        return dataclasses.replace(self, sigma_ve=float(value))
 
     # ---- Convenience: flat-dict view -----------------------------------------
 

@@ -82,7 +82,13 @@ class FrozenCatBoostPredictor:
         if not ps:
             return obs
         p_offline = sum(ps) / len(ps)
-        return obs.with_p_offline(Probability(p_offline))
+        # Virtual-ensemble uncertainty: population std across ensemble members.
+        # Single-member ensemble → 0.0. Bounded by 0.5 since p ∈ [0, 1].
+        if len(ps) == 1:
+            sigma_ve = 0.0
+        else:
+            sigma_ve = math.sqrt(sum((p - p_offline) ** 2 for p in ps) / len(ps))
+        return obs.with_p_offline(Probability(p_offline)).with_sigma_ve(sigma_ve)
 
     def update(self, obs: Observation, label: Optional[int] = None) -> None:
         return None  # frozen

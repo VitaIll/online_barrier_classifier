@@ -88,6 +88,16 @@ class RebuildBundle:
     # CV per-fold rows when in CV mode
     cv_per_fold: Optional[list[dict]] = None
     cv_pbo: Optional[float] = None
+    # Adaptive-threshold per-bar strategy state (additive). Empty for legacy
+    # strategies that don't implement get_state().
+    tau_history: list[float] = field(default_factory=list)
+    r_hat_ewma_history: list[float] = field(default_factory=list)
+    r_star_ewma_history: list[float] = field(default_factory=list)
+    paused_history: list[bool] = field(default_factory=list)
+    sigma_ve_history: list[float] = field(default_factory=list)
+    inventory_size_history: list[int] = field(default_factory=list)
+    hold_age_max_history: list[int] = field(default_factory=list)
+    warmup_calibration: Optional[dict] = None
 
 
 # =============================================================================
@@ -140,6 +150,14 @@ def _build_bundle(
     y_hist: list[int] = []
     r_hist: list[int] = []
     pnl: list[float] = []
+    tau_h: list[float] = []
+    rhat_h: list[float] = []
+    rstar_h: list[float] = []
+    paused_h: list[bool] = []
+    sigma_h: list[float] = []
+    inv_h: list[int] = []
+    age_h: list[int] = []
+    warmup_cal: Optional[dict] = None
     if engine_result is not None:
         p_hist = list(getattr(engine_result, "p_online_history", []) or [])
         y_hist = list(getattr(engine_result, "label_history", []) or [])
@@ -147,6 +165,16 @@ def _build_bundle(
         ledger = getattr(engine_result, "ledger", None)
         if ledger is not None:
             pnl = [float(getattr(f, "pnl_log_net", 0.0)) for f in (ledger.fills or [])]
+        tau_h = list(getattr(engine_result, "tau_history", []) or [])
+        rhat_h = list(getattr(engine_result, "r_hat_ewma_history", []) or [])
+        rstar_h = list(getattr(engine_result, "r_star_ewma_history", []) or [])
+        paused_h = list(getattr(engine_result, "paused_history", []) or [])
+        sigma_h = list(getattr(engine_result, "sigma_ve_history", []) or [])
+        inv_h = list(getattr(engine_result, "inventory_size_history", []) or [])
+        age_h = list(getattr(engine_result, "hold_age_max_history", []) or [])
+        wc = getattr(engine_result, "warmup_calibration", None)
+        if wc is not None:
+            warmup_cal = dict(wc) if isinstance(wc, dict) else wc
     return RebuildBundle(
         metrics=dict(metrics or {}),
         spec_dict=dict(spec_dict or {}),
@@ -158,6 +186,14 @@ def _build_bundle(
         pnl_log=pnl,
         cv_per_fold=cv_per_fold,
         cv_pbo=cv_pbo,
+        tau_history=tau_h,
+        r_hat_ewma_history=rhat_h,
+        r_star_ewma_history=rstar_h,
+        paused_history=paused_h,
+        sigma_ve_history=sigma_h,
+        inventory_size_history=inv_h,
+        hold_age_max_history=age_h,
+        warmup_calibration=warmup_cal,
     )
 
 
@@ -514,6 +550,15 @@ class _ReplayEngineResult:
     n_actions_approved: int = 0
     n_actions_rejected: int = 0
     pipeline_state_hash: bytes = b""
+    # Adaptive-threshold strategy state (additive)
+    tau_history: list[float] = field(default_factory=list)
+    r_hat_ewma_history: list[float] = field(default_factory=list)
+    r_star_ewma_history: list[float] = field(default_factory=list)
+    paused_history: list[bool] = field(default_factory=list)
+    sigma_ve_history: list[float] = field(default_factory=list)
+    inventory_size_history: list[int] = field(default_factory=list)
+    hold_age_max_history: list[int] = field(default_factory=list)
+    warmup_calibration: Optional[dict] = None
 
     @classmethod
     def from_bundle(cls, b: "RebuildBundle") -> "_ReplayEngineResult":
@@ -533,6 +578,17 @@ class _ReplayEngineResult:
             n_actions_approved=int(m.get("n_actions_approved", 0) or 0),
             n_actions_rejected=int(m.get("n_actions_rejected", 0) or 0),
             pipeline_state_hash=sh,
+            tau_history=list(b.tau_history or []),
+            r_hat_ewma_history=list(b.r_hat_ewma_history or []),
+            r_star_ewma_history=list(b.r_star_ewma_history or []),
+            paused_history=list(b.paused_history or []),
+            sigma_ve_history=list(b.sigma_ve_history or []),
+            inventory_size_history=list(b.inventory_size_history or []),
+            hold_age_max_history=list(b.hold_age_max_history or []),
+            warmup_calibration=(
+                dict(b.warmup_calibration) if isinstance(b.warmup_calibration, dict)
+                else b.warmup_calibration
+            ),
         )
 
 

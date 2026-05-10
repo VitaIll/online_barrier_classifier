@@ -17,6 +17,7 @@ from wagie.core.observation import Observation
 from wagie.core.pipeline import StageKind
 from wagie.core.portfolio import Portfolio
 from wagie.core.time import Duration
+from wagie.strategy.adaptive_threshold import AdaptiveThresholdController
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +167,229 @@ class EvCalibratedSize(StrategyBase):
         return (self._open(size),) if size > 0.0 else ()
 
 
+# -----------------------------------------------------------------------------
+# CompositeAdaptiveStrategy — wraps AdaptiveThresholdController + hold-age cap
+# -----------------------------------------------------------------------------
+
+
+@dataclass
+class CompositeAdaptiveStrategy:
+    """Strategy that gates on an :class:`AdaptiveThresholdController` and
+    closes positions once their bar-age reaches ``t_max``.
+
+    Mutable (carries a controller with EWMA state) — uses a non-frozen
+    dataclass. Cannot inherit from the frozen ``StrategyBase`` (Python
+    forbids non-frozen subclasses of a frozen parent), so the same Stage
+    Protocol surface and barrier defaults are duplicated as fields and
+    methods here.
+
+    The controller is observed once per bar:
+
+    - ``decide()`` runs first, drains any matured label that arrived via
+      ``update()`` since the last decide, and calls ``controller.observe``
+      with (previous-bar entered, matured label) — this advances both EWMAs
+      in lock-step with bar boundaries.
+    - The matured-label hand-off uses the existing Stage Protocol
+      ``update(obs, label)`` contract — no engine-level hook is required.
+      ``learn_one`` is invoked by the engine before ``transform_one`` per
+      tick, so the label that mutates state in ``update`` is consumed by
+      the very next ``decide`` call.
+    - Hold-age exits compute bar-age from the position's ``open_ts`` and
+      the current clock; the strategy issues ``Action.close`` on positions
+      whose age has reached ``t_max``.
+    """
+
+    controller: Optional[AdaptiveThresholdController] = None
+    name: str = "composite_adaptive"
+    t_max: int = 200
+    bar_minutes: int = 20
+    side: Side = Side.LONG
+    take_profit: LogReturn = field(default_factory=lambda: LogReturn.from_bps(41.11))
+    stop_loss: LogReturn = field(default_factory=lambda: LogReturn.from_bps(41.11))
+    expiry: Duration = field(default_factory=lambda: Duration.from_minutes(20))
+    # Which probability the entry gate reads. "online" (default) uses the
+    # ARF-corrected p_online; "offline" bypasses the ARF and reads the raw
+    # p_offline from the offline ensemble. ARF still runs in the pipeline
+    # (so calibration/drift sections stay meaningful) — only the strategy
+    # signal source changes.
+    signal_source: str = "online"
+    kind: StageKind = StageKind.STRATEGY
+
+    # Mutable state — initialised lazily; not constructor args.
+    _last_entered: bool = field(init=False, default=False)
+    _pending_label: Optional[int] = field(init=False, default=None)
+    _last_inv_size: int = field(init=False, default=0)
+    _last_hold_age_max: int = field(init=False, default=0)
+
+    def __post_init__(self) -> None:
+        if self.controller is None:
+            raise ValueError("CompositeAdaptiveStrategy requires a controller")
+        if int(self.t_max) <= 0:
+            raise ValueError(f"t_max must be > 0; got {self.t_max}")
+        if int(self.bar_minutes) <= 0:
+            raise ValueError(f"bar_minutes must be > 0; got {self.bar_minutes}")
+
+    # ---- Stage Protocol surface (mirrors StrategyBase) ---------------------
+
+    def transform(self, obs: Observation, ctx: Optional[StrategyContext] = None) -> Observation:
+        """Stage Protocol adapter: store decided actions on the Observation."""
+        if ctx is None:
+            ctx = StrategyContext()
+        actions = self.decide(obs, ctx)
+        return obs.with_actions(actions)
+
+    def _open(self, size: float = 1.0) -> Action:
+        return Action.open(
+            side=self.side,
+            size=Probability(min(1.0, max(0.0, size))),
+            take_profit=self.take_profit,
+            stop_loss=self.stop_loss,
+            expiry=self.expiry,
+        )
+
+    @property
+    def n_seen(self) -> int:
+        return 0
+
+    # ---- Stage Protocol: update consumes matured labels --------------------
+
+    def update(self, obs: Observation, label: Optional[int] = None) -> None:
+        """Stash the matured label so the next ``decide`` can feed it to the
+        controller alongside the previous bar's entered flag."""
+        if label is not None:
+            try:
+                self._pending_label = int(label)
+            except (TypeError, ValueError):
+                self._pending_label = None
+
+    # ---- Helpers -----------------------------------------------------------
+
+    def _bar_age(self, pos, clock_ns: int) -> int:
+        """Number of bars elapsed since the position opened, floor-divided."""
+        try:
+            elapsed_ns = max(0, int(clock_ns) - int(pos.open_ts.ns))
+        except (AttributeError, TypeError):
+            return 0
+        if self.bar_minutes <= 0:
+            return 0
+        bar_ns = int(self.bar_minutes) * 60_000_000_000
+        return elapsed_ns // bar_ns if bar_ns > 0 else 0
+
+    # ---- decide ------------------------------------------------------------
+
+    def decide(self, frame: Observation, ctx: StrategyContext) -> Sequence[Action]:
+        # 1. Advance the controller using the *previous* bar's entered flag and
+        #    any matured label that arrived since the last decide.
+        matured_label = self._pending_label
+        self._pending_label = None
+        self.controller.observe(
+            entered=self._last_entered, label_matured=matured_label,
+        )
+
+        actions: list[Action] = []
+
+        # 2. Hold-age exits — close positions that have reached t_max bars.
+        open_positions = tuple(ctx.portfolio.open_positions)
+        max_age = 0
+        for pos in open_positions:
+            age = self._bar_age(pos, ctx.clock_ns)
+            if age > max_age:
+                max_age = age
+            if age >= int(self.t_max):
+                actions.append(Action.close(pos.position_id))
+
+        # 3. Entry decision — only when nothing already open (single-shot
+        #    semantics, mirroring ThresholdGate).
+        entered = False
+        if ctx.n_open_orders == 0:
+            p = (frame.p_offline if self.signal_source == "offline"
+                 else frame.p_online)
+            if p is not None:
+                entered = self.controller.should_enter(
+                    float(p),
+                    float(frame.sigma_ve) if frame.sigma_ve is not None else None,
+                )
+                if entered:
+                    actions.append(self._open(1.0))
+            else:
+                # No probability yet — record sigma_ve for inspection but
+                # don't enter.
+                self.controller.last_sigma_ve = (
+                    float(frame.sigma_ve) if frame.sigma_ve is not None else None
+                )
+
+        # 4. Cache state for the engine's per-bar collector + next observe().
+        self._last_entered = bool(entered)
+        self._last_inv_size = len(open_positions)
+        self._last_hold_age_max = int(max_age)
+
+        return tuple(actions)
+
+    # ---- get_state ---------------------------------------------------------
+
+    def get_state(self) -> dict:
+        s = self.controller.get_state()
+        s["inv_size"] = int(self._last_inv_size)
+        s["hold_age_max"] = int(self._last_hold_age_max)
+        return s
+
+    # ---- Stateful overrides ------------------------------------------------
+
+    def state_dict(self) -> dict:
+        return {
+            "tau": float(self.controller.tau),
+            "r_hat_ewma": float(self.controller.r_hat_ewma),
+            "r_star_ewma": float(self.controller.r_star_ewma),
+            "paused": bool(self.controller.paused),
+            "last_entered": bool(self._last_entered),
+            "pending_label": (
+                int(self._pending_label) if self._pending_label is not None else None
+            ),
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        if "tau" in state:
+            self.controller.tau = float(state["tau"])
+        if "r_hat_ewma" in state:
+            self.controller.r_hat_ewma = float(state["r_hat_ewma"])
+        if "r_star_ewma" in state:
+            self.controller.r_star_ewma = float(state["r_star_ewma"])
+        if "paused" in state:
+            self.controller.paused = bool(state["paused"])
+        if "last_entered" in state:
+            self._last_entered = bool(state["last_entered"])
+        if "pending_label" in state:
+            v = state["pending_label"]
+            self._pending_label = int(v) if v is not None else None
+
+    def state_hash(self) -> bytes:
+        h = hashlib.sha256()
+        h.update(b"composite_adaptive|")
+        h.update(self.name.encode())
+        h.update(b"|")
+        h.update(repr((
+            float(self.controller.tau),
+            float(self.controller.r_hat_ewma),
+            float(self.controller.r_star_ewma),
+            bool(self.controller.paused),
+            int(self.t_max),
+            int(self.bar_minutes),
+        )).encode())
+        return h.digest()
+
+    def reset(self) -> None:
+        # Re-initialise EWMAs to the target (mirrors __post_init__ on the
+        # controller). Pause flag clears too.
+        self.controller.r_hat_ewma = float(self.controller.r_star_init)
+        self.controller.r_star_ewma = float(self.controller.r_star_init)
+        self.controller.paused = False
+        self.controller.last_sigma_ve = None
+        self._last_entered = False
+        self._pending_label = None
+        self._last_inv_size = 0
+        self._last_hold_age_max = 0
+
+
 # Back-compat alias — old code paths importing PureConformalGate get the
 # threshold gate instead.
 PureConformalGate = ThresholdGate
@@ -175,14 +399,15 @@ PureConformalGate = ThresholdGate
 # Registry
 # -----------------------------------------------------------------------------
 
-STRATEGY_REGISTRY: dict[str, type[StrategyBase]] = {
+STRATEGY_REGISTRY: dict[str, type] = {
     "threshold_gate": ThresholdGate,
     "pure_conformal": ThresholdGate,   # alias for back-compat YAMLs
     "ev_calibrated_size": EvCalibratedSize,
+    "composite_adaptive": CompositeAdaptiveStrategy,
 }
 
 
-def build_strategy(kind: str, **kwargs) -> StrategyBase:
+def build_strategy(kind: str, **kwargs):
     if kind not in STRATEGY_REGISTRY:
         raise ValueError(f"unknown strategy kind {kind!r}; valid: {list(STRATEGY_REGISTRY)}")
     cls = STRATEGY_REGISTRY[kind]
@@ -195,6 +420,13 @@ def build_strategy(kind: str, **kwargs) -> StrategyBase:
     # Special-case: regime_gated takes a base_kind to wrap.
     if kind == "regime_gated":
         return _build_regime_gated(**kwargs)
+    # Special-case: composite_adaptive takes nested controller_kwargs.
+    if kind == "composite_adaptive":
+        ctrl_kwargs = kwargs.pop("controller_kwargs", None) or kwargs.pop("controller", None)
+        if isinstance(ctrl_kwargs, dict):
+            kwargs["controller"] = AdaptiveThresholdController(**ctrl_kwargs)
+        elif isinstance(ctrl_kwargs, AdaptiveThresholdController):
+            kwargs["controller"] = ctrl_kwargs
     return cls(**kwargs)
 
 
@@ -293,6 +525,7 @@ STRATEGY_REGISTRY["regime_gated"] = RegimeGatedStrategy
 __all__ = [
     "Strategy", "StrategyContext", "StrategyBase",
     "ThresholdGate", "PureConformalGate", "EvCalibratedSize",
+    "CompositeAdaptiveStrategy", "AdaptiveThresholdController",
     "RegimeGatedStrategy",
     "STRATEGY_REGISTRY", "build_strategy",
 ]
