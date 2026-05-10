@@ -62,10 +62,14 @@ def _cmd_experiment_list(args) -> int:
             try:
                 d = json.loads(m.read_text())
                 t = d.get("trading", {})
+
+                def _fmt(v, spec):
+                    return format(v, spec) if isinstance(v, (int, float)) else "n/a"
+
                 print(f"{r.name}\tn={t.get('n_trades', 0)}"
-                      f"\tsharpe={t.get('sharpe', 0.0):+.3f}"
-                      f"\tbrier={d.get('brier', 0.0):.5f}"
-                      f"\tece={d.get('ece', 0.0):.5f}")
+                      f"\tsharpe={_fmt(t.get('sharpe'), '+.3f')}"
+                      f"\tbrier={_fmt(d.get('brier'), '.5f')}"
+                      f"\tece={_fmt(d.get('ece'), '.5f')}")
             except Exception:
                 print(f"{r.name}\t(metrics unreadable)")
         else:

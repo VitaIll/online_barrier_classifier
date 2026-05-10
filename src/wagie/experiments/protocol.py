@@ -130,7 +130,8 @@ def _write_blocked_md(
         "",
         "## Observed",
         f"- n_trades: `{trading.get('n_trades', 0)}`",
-        f"- sharpe (point): `{float(trading.get('sharpe', 0.0)):+.4f}`",
+        f"- sharpe (point): `"
+        f"{format(trading['sharpe'], '+.4f') if isinstance(trading.get('sharpe'), (int, float)) else 'n/a'}`",
         f"- sharpe_ci: `{metrics.get('sharpe_ci')}`",
         f"- brier: `{metrics.get('brier')}`",
         f"- ece: `{metrics.get('ece')}`",

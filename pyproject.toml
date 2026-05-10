@@ -67,7 +67,7 @@ include = ["wagie*"]
 [tool.pytest.ini_options]
 minversion = "7.0"
 testpaths = ["tests"]
-norecursedirs = ["_pending", "_pending_until_implemented", "_archive"]
+norecursedirs = ["_pending", "_pending_until_implemented", "_archive", ".hypothesis", ".pytest_cache", ".ruff_cache", ".tmp", ".claude"]
 addopts = [
     "--strict-markers",
     "--tb=short",

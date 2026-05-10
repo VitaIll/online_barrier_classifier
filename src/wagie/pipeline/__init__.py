@@ -125,10 +125,10 @@ def list_stages(kind: Optional[StageKind] = None) -> list[str]:
 # --- Auto-register the shipped concrete stages -------------------------------
 # These are the same classes ``wagie.run.build_pipeline`` instantiates today;
 # registering them keeps existing call sites unchanged while opening the door
-# to plugin predictors. The Mondrian-ACI calibrator is intentionally NOT
-# registered here (sibling ARCH owns the conformal layer); it remains
-# importable as ``MondrianACICalibrator`` for back-compat but is no longer
-# the default coverage stage.
+# to plugin predictors. The historic Mondrian-ACI calibrator was removed in
+# the conformal-layer simplification — strategies now gate on the calibrated
+# ``p_online`` from OnlineARFCorrector directly, so no calibration stage is
+# registered.
 
 register_stage(
     "frozen_catboost",

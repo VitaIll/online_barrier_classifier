@@ -38,11 +38,17 @@ class ExperimentResult:
     def headline(self) -> str:
         t = self.metrics.get("trading", {}) or {}
         prefix = "" if self.accepted else "[BLOCKED] "
+
+        # CV mode writes None for brier/ece/sharpe (no per-decision predictions
+        # captured), so render "n/a" rather than format-crash.
+        def _fmt(v, spec):
+            return format(v, spec) if isinstance(v, (int, float)) else "n/a"
+
         return (
             f"{prefix}run_id={self.run_id} | n_trades={t.get('n_trades', 0)} "
-            f"sharpe={t.get('sharpe', 0.0):+.3f} "
-            f"brier={self.metrics.get('brier', 0.0):.5f} "
-            f"ece={self.metrics.get('ece', 0.0):.5f}"
+            f"sharpe={_fmt(t.get('sharpe'), '+.3f')} "
+            f"brier={_fmt(self.metrics.get('brier'), '.5f')} "
+            f"ece={_fmt(self.metrics.get('ece'), '.5f')}"
         )
 
 

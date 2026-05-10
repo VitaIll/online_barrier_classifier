@@ -90,15 +90,19 @@ class Report:
         lines.append(f"- **n_trades**: `{t.get('n_trades', 0)}`  "
                      f"(TP={t.get('n_tp', 0)} / SL={t.get('n_sl', 0)} / "
                      f"timeout={t.get('n_timeout', 0)})")
-        lines.append(f"- **Sharpe (annualized)**: `{t.get('sharpe', 0.0):+.3f}`")
-        lines.append(f"- **PSR**: `{t.get('probabilistic_sharpe', 0.0):.3f}`")
-        lines.append(f"- **Sortino**: `{t.get('sortino', 0.0):+.3f}`")
-        lines.append(f"- **hit rate**: `{t.get('hit_rate', 0.0):.3f}`")
-        lines.append(f"- **profit factor**: `{t.get('profit_factor', 0.0):.3f}`")
-        lines.append(f"- **max drawdown (log)**: `{t.get('max_drawdown_log', 0.0):.4f}`")
-        lines.append(f"- **CDaR 5% (log)**: `{t.get('cdar_5pct_log', 0.0):.4f}`")
-        lines.append(f"- **total log return**: `{t.get('total_log_return', 0.0):+.4f}` "
-                     f"({t.get('total_pct_return', 0.0):+.2%})")
+        # CV mode writes None for trading metrics; render `n/a` rather than crash.
+        def _f(v, spec, default=0.0):
+            x = v if isinstance(v, (int, float)) else default
+            return format(x, spec)
+        lines.append(f"- **Sharpe (annualized)**: `{_f(t.get('sharpe'), '+.3f')}`")
+        lines.append(f"- **PSR**: `{_f(t.get('probabilistic_sharpe'), '.3f')}`")
+        lines.append(f"- **Sortino**: `{_f(t.get('sortino'), '+.3f')}`")
+        lines.append(f"- **hit rate**: `{_f(t.get('hit_rate'), '.3f')}`")
+        lines.append(f"- **profit factor**: `{_f(t.get('profit_factor'), '.3f')}`")
+        lines.append(f"- **max drawdown (log)**: `{_f(t.get('max_drawdown_log'), '.4f')}`")
+        lines.append(f"- **CDaR 5% (log)**: `{_f(t.get('cdar_5pct_log'), '.4f')}`")
+        lines.append(f"- **total log return**: `{_f(t.get('total_log_return'), '+.4f')}` "
+                     f"({_f(t.get('total_pct_return'), '+.2%')})")
         if "equity_curve" in chart_paths:
             lines.append("")
             lines.append(self._image("Equity curve", chart_paths["equity_curve"], out_path))

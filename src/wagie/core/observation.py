@@ -2,8 +2,7 @@
 
 Each Pipeline stage is a function (Observation) -> Observation that ADDS
 information via with_* methods (immutable replace). The full Observation at
-the strategy stage carries: bar, features, p_offline, p_online, regime, q_lo,
-in_set, decision.
+the strategy stage carries: bar, features, p_offline, p_online, regime, decision.
 
 Mathematical structure:
     - Product type (every with_* yields a new immutable Observation)
@@ -83,8 +82,6 @@ class Observation:
     p_offline: Optional[Probability] = None
     p_online: Optional[Probability] = None
     regime_id: Optional[int] = None
-    q_lo: Mapping[float, float] = field(default_factory=dict)
-    in_set: Mapping[float, bool] = field(default_factory=dict)
     actions: tuple = field(default_factory=tuple)   # tuple[Action, ...]
     drift_signals: Optional[Mapping[str, int]] = None
 
@@ -113,11 +110,6 @@ class Observation:
 
     def with_regime(self, regime_id: int) -> "Observation":
         return dataclasses.replace(self, regime_id=int(regime_id))
-
-    def with_calibration(self, alpha: float, q_lo: float, in_set: bool) -> "Observation":
-        new_q = {**self.q_lo, float(alpha): float(q_lo)}
-        new_in = {**self.in_set, float(alpha): bool(in_set)}
-        return dataclasses.replace(self, q_lo=new_q, in_set=new_in)
 
     def with_actions(self, actions) -> "Observation":
         """Set the sequence of actions emitted by Strategy.decide."""
@@ -153,12 +145,6 @@ class Observation:
             out["p_online"] = float(self.p_online)
         if self.regime_id is not None:
             out["regime_id"] = self.regime_id
-        for a, q in self.q_lo.items():
-            key = f"q_lo_{int(round(a*100)):02d}"
-            out[key] = float(q)
-        for a, s in self.in_set.items():
-            key = f"in_set_{int(round(a*100)):02d}"
-            out[key] = int(s)
         return out
 
 

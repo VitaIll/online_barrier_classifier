@@ -38,7 +38,9 @@ from wagie.strategy import (
 # ---------------------------------------------------------------------------
 
 
-def _mk_obs(*, regime_id, in_set_alpha=0.10, in_set=True, p_online=0.7):
+def _mk_obs(*, regime_id, p_online=0.7, **_unused):
+    """_unused absorbs legacy `in_set_alpha=` / `in_set=` kwargs from the
+    pre-conformal-removal API; the gate now reads p_online directly."""
     bar = DecisionBar(
         ts_init=Timestamp(1_700_000_000_000_000_000),
         open=Price(100.0), high=Price(101.0), low=Price(99.0),
@@ -46,7 +48,6 @@ def _mk_obs(*, regime_id, in_set_alpha=0.10, in_set=True, p_online=0.7):
     )
     obs = Observation(bar=bar)
     obs = obs.with_p_online(Probability(p_online))
-    obs = obs.with_calibration(in_set_alpha, 0.5, in_set)
     if regime_id is not None:
         obs = obs.with_regime(regime_id)
     return obs
