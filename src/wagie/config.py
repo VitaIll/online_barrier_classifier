@@ -1,21 +1,28 @@
 """WagieConfig — pydantic-validated nested config for the engine.
 
 The single source of truth for engine configuration:
-    WagieConfig(data, model, strategy, broker, runtime, cv)
+    WagieConfig(data, model, strategy, broker, runtime)
 
 Each subconfig is a pydantic BaseModel with `extra="forbid"` — typos are errors.
 End users go through `wagie experiment run <spec.yaml>`; this config is wrapped
 by `ExperimentSpec.wagie`.
+
+Deprecation note (audit-fix):
+    ``WagieConfig.cv`` and ``ExperimentSpec.cv`` overlapped fully and only the
+    latter was read by the protocol. ``WagieConfig.cv`` is now deprecated; it
+    is still present so existing YAML specs parse, but reading the field emits
+    a :class:`DeprecationWarning`. New code should set ``ExperimentSpec.cv``.
 """
 
 from __future__ import annotations
 
 import hashlib
+import warnings
 from pathlib import Path
 from typing import Literal, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class DataConfig(BaseModel):
@@ -101,16 +108,39 @@ class RuntimeConfig(BaseModel):
 
 
 class WagieConfig(BaseModel):
-    """Nested pydantic config — the single source of truth for engine config."""
+    """Nested pydantic config — the single source of truth for engine config.
+
+    .. deprecated::
+        The ``cv`` field is deprecated; ``ExperimentSpec.cv`` is the
+        authoritative cross-validation block (see audit dedupe note in module
+        docstring). Reading ``WagieConfig.cv`` emits a DeprecationWarning.
+    """
 
     data: DataConfig
     model: ModelConfig = Field(default_factory=ModelConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
     broker: BrokerConfig = Field(default_factory=BrokerConfig)
-    cv: CVConfig = Field(default_factory=CVConfig)
+    cv: CVConfig = Field(default_factory=CVConfig,
+                         description="DEPRECATED — use ExperimentSpec.cv")
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
 
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def _warn_if_cv_overridden(self):
+        """Emit DeprecationWarning iff the user explicitly set ``cv`` to a
+        non-default value. The default-factory case is silent so existing
+        specs that never mention ``cv`` don't get spammed."""
+        default = CVConfig()
+        if self.cv.model_dump() != default.model_dump():
+            warnings.warn(
+                "WagieConfig.cv is deprecated and will be removed in a future "
+                "release; move CV knobs into ExperimentSpec.cv "
+                "(see src/wagie/config.py module docstring).",
+                DeprecationWarning,
+                stacklevel=4,
+            )
+        return self
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "WagieConfig":

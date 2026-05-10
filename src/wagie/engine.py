@@ -12,16 +12,27 @@ Per-tick ordering:
          if approved → Broker.dispatch(action)
          if rejected → emit RiskRejected event
     8. Audit + EventLog
+    9. (every N decisions) checkpoint_callback(engine)
+
+Error policy (audit-fix):
+    Per-stage failures used to be silently swallowed — a model that stopped
+    learning was invisible. The new policy: a Pipeline raises
+    :class:`wagie.core.errors.StageError`, the engine catches it, logs a
+    structured warning AND increments :attr:`EngineResult.n_stage_errors`
+    so failures show up in metrics.json. Catastrophic failures (anything
+    else) still propagate to the caller — the engine never silently exits.
 """
 
 from __future__ import annotations
 
 import logging
 import queue
+import signal
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from wagie.core.action import Action, ActionKind, Side
+from wagie.core.errors import StageError
 from wagie.core.event import (
     BarrierTouched, DecisionBar, Event, OrderSubmitted,
     PositionClosed, RiskPolicyChanged, RiskRejected,
@@ -53,6 +64,11 @@ class EngineResult:
     final_portfolio: Portfolio
     audit: list[dict] = field(default_factory=list)
     events: list[Event] = field(default_factory=list)
+    # Audit-fix counters (replace silently-swallowed errors with visible totals).
+    n_stage_errors: int = 0          # StageError raised + caught per tick
+    n_drifts: int = 0                # DriftDetected events observed
+    n_checkpoints: int = 0           # successful checkpoint_callback invocations
+    graceful_shutdown: bool = False  # SIGTERM/SIGINT trapped, final ckpt written
 
     @property
     def fills(self) -> list[BarrierTouched]:
@@ -74,6 +90,9 @@ class Engine:
         warmup_samples: int = 0,
         capture_audit: bool = False,
         capture_events: bool = False,
+        checkpoint_callback: Optional[Callable[["Engine"], None]] = None,
+        checkpoint_every: int = 0,
+        install_signal_handlers: bool = False,
     ):
         self.source = source
         self.pipeline = pipeline
@@ -84,6 +103,12 @@ class Engine:
         self.warmup_samples = int(warmup_samples)
         self.capture_audit = bool(capture_audit)
         self.capture_events = bool(capture_events)
+        # Periodic state checkpointing (audit-fix). When ``checkpoint_every``
+        # > 0 and ``checkpoint_callback`` is provided, the engine calls the
+        # callback every N decisions and on graceful shutdown.
+        self.checkpoint_callback = checkpoint_callback
+        self.checkpoint_every = int(checkpoint_every)
+        self.install_signal_handlers = bool(install_signal_handlers)
 
         # Console command queue (for G10 — TradingConsole)
         self.command_queue: "queue.Queue" = queue.Queue()
@@ -94,19 +119,76 @@ class Engine:
         self._n_skipped_warmup = 0
         self._n_approved = 0
         self._n_rejected = 0
+        self._n_stage_errors = 0
+        self._n_drifts = 0
+        self._n_checkpoints = 0
         self._audit: list[dict] = []
         self._events: list[Event] = []
         self._n_seen = 0
+        self._stop_requested = False
+        self._graceful_shutdown = False
+        self._last_checkpoint_at = 0  # _n_decisions at last checkpoint
+
+    def request_stop(self) -> None:
+        """Set the stop flag — the next tick after this call exits the loop.
+
+        Used by SIGTERM/SIGINT handlers and the TradingConsole.
+        """
+        self._stop_requested = True
+
+    def _install_signal_handlers(self):
+        """Trap SIGTERM/SIGINT and request graceful shutdown.
+
+        Returns the previous handlers so we can restore them on exit. Some
+        platforms (Windows console) don't support SIGTERM cleanly — we
+        defensively wrap each ``signal.signal()`` call.
+        """
+        prior = {}
+
+        def _handler(signum, frame):  # noqa: ARG001  (frame unused)
+            logger.warning("engine: caught signal %d, requesting graceful stop", signum)
+            self.request_stop()
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                prior[sig] = signal.signal(sig, _handler)
+            except (ValueError, OSError, AttributeError):
+                # Not on the main thread, or platform doesn't support — skip.
+                prior[sig] = None
+        return prior
+
+    @staticmethod
+    def _restore_signal_handlers(prior):
+        for sig, handler in prior.items():
+            try:
+                if handler is not None:
+                    signal.signal(sig, handler)
+            except (ValueError, OSError, AttributeError):
+                pass
 
     def run(self) -> EngineResult:
+        prior_handlers = None
+        if self.install_signal_handlers:
+            prior_handlers = self._install_signal_handlers()
         try:
-            for bar in self.source.stream():
-                self._process_one(bar)
-        finally:
             try:
-                self.source.close()
-            except Exception:
-                pass
+                for bar in self.source.stream():
+                    self._process_one(bar)
+                    if self._stop_requested:
+                        self._graceful_shutdown = True
+                        logger.warning("engine: stop requested, exiting bar loop")
+                        break
+            finally:
+                try:
+                    self.source.close()
+                except Exception as exc:  # noqa: BLE001  (we DO log it now)
+                    logger.warning("source.close() raised %s: %s",
+                                   type(exc).__name__, exc)
+                # Final checkpoint — always, even on graceful shutdown / exception.
+                self._maybe_checkpoint(final=True)
+        finally:
+            if prior_handlers is not None:
+                self._restore_signal_handlers(prior_handlers)
         ledger = self.broker.finalize()
         # Drain broker events into engine's event log
         if self.capture_events:
@@ -123,7 +205,35 @@ class Engine:
             else Portfolio(),
             audit=self._audit,
             events=self._events,
+            n_stage_errors=self._n_stage_errors,
+            n_drifts=self._n_drifts,
+            n_checkpoints=self._n_checkpoints,
+            graceful_shutdown=self._graceful_shutdown,
         )
+
+    def _maybe_checkpoint(self, *, final: bool = False) -> None:
+        """Invoke the checkpoint callback if conditions are met.
+
+        - Always runs on `final=True` (graceful shutdown / end of stream)
+          if a callback is configured.
+        - Otherwise, runs when ``_n_decisions - _last_checkpoint_at >= every``.
+        """
+        if self.checkpoint_callback is None:
+            return
+        if not final:
+            if self.checkpoint_every <= 0:
+                return
+            if (self._n_decisions - self._last_checkpoint_at) < self.checkpoint_every:
+                return
+        try:
+            self.checkpoint_callback(self)
+            self._n_checkpoints += 1
+            self._last_checkpoint_at = self._n_decisions
+        except Exception as exc:  # noqa: BLE001
+            # Checkpointing failure must not crash the engine — log + carry on.
+            logger.warning(
+                "checkpoint_callback raised %s: %s", type(exc).__name__, exc,
+            )
 
     def _drain_console_commands(self) -> None:
         """Process any operator commands in the queue, between bars."""
@@ -149,7 +259,15 @@ class Engine:
             emitted = self.label_buffer.maybe_emit(bar)
             if emitted is not None:
                 obs_prev, y_prev = emitted
-                self.pipeline.learn_one(obs_prev, y_prev)
+                try:
+                    self.pipeline.learn_one(obs_prev, y_prev)
+                except StageError as exc:
+                    self._n_stage_errors += 1
+                    logger.warning(
+                        "learn_one stage failure: %s", exc,
+                        extra={"stage_name": exc.stage_name, "op": exc.op,
+                               "context": exc.context},
+                    )
 
         # 5. Broker resolves any open positions; emits position events
         fills = self.broker.advance_to(ts, bar)
@@ -161,8 +279,13 @@ class Engine:
             obs = Observation(bar=bar)
             try:
                 self.pipeline.transform_one(obs, self._make_ctx(ts))
-            except Exception:
-                pass
+            except StageError as exc:
+                self._n_stage_errors += 1
+                logger.warning(
+                    "warmup transform_one stage failure: %s", exc,
+                    extra={"stage_name": exc.stage_name, "op": exc.op,
+                           "context": exc.context, "phase": "warmup"},
+                )
             self._n_skipped_warmup += 1
             return
 
@@ -174,8 +297,13 @@ class Engine:
         ctx = self._make_ctx(ts)
         try:
             obs = self.pipeline.transform_one(obs, ctx)
-        except Exception as e:
-            logger.warning(f"transform_one failed: {e}")
+        except StageError as exc:
+            self._n_stage_errors += 1
+            logger.warning(
+                "transform_one stage failure: %s", exc,
+                extra={"stage_name": exc.stage_name, "op": exc.op,
+                       "context": exc.context, "phase": "predict"},
+            )
             return
 
         # 7. Dispatch each Action through RiskEngine -> Broker
@@ -219,6 +347,19 @@ class Engine:
                 "n_open_after": portfolio.n_open,
                 "n_fills_this_tick": len(fills),
             })
+
+        # Drift signals — count any DriftDetected on the observation (additive
+        # field added by STREAMING agent on core/observation.py); coordinate by
+        # tolerating the field's absence.
+        drift_signals = getattr(obs, "drift_signals", None)
+        if drift_signals:
+            try:
+                self._n_drifts += int(len(drift_signals))
+            except TypeError:
+                pass
+
+        # 9. Periodic checkpoint hook.
+        self._maybe_checkpoint()
 
     def _make_ctx(self, ts: Timestamp) -> StrategyContext:
         portfolio = (self.broker.portfolio()
