@@ -58,7 +58,7 @@ PINNED_TESTS = (
     # Pipeline construction guards
     ("test_pipeline_construction.py", "test_pipeline_requires_strategy_at_end"),
     ("test_pipeline_construction.py", "test_pipeline_rejects_out_of_order_kinds"),
-    ("test_pipeline_construction.py", "test_pipeline_accepts_valid_order"),
+    ("test_pipeline_construction.py", "test_pipeline_accepts_valid_order_no_calibrator"),
     ("test_pipeline_construction.py", "test_pipeline_rejects_duplicate_names"),
     # Predict-then-learn ordering (engine invariant I.7)
     ("test_engine_invariants.py",

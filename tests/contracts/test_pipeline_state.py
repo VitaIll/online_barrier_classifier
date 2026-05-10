@@ -37,7 +37,7 @@ from wagie.pipeline import (
 from wagie.pipeline.label_buffer import LabelBuffer
 from wagie.pipeline.online_arf import OnlineARFCorrector
 from wagie.pipeline.sealed import Pipeline
-from wagie.strategy import StrategyContext, ThresholdGate
+from wagie.strategy import PureConformalGate, StrategyContext, ThresholdGate
 
 
 def _bar(close: float = 100.0, segment_id: int = 0, ts_ns: int = 1_000_000_000) -> DecisionBar:
@@ -612,7 +612,7 @@ def test_register_stage_round_trip_then_build():
         assert stage.label_value == 0.7
 
         # The built stage plays nicely in a real Pipeline.
-        pipe = Pipeline([stage, PureConformalGate(name="strat", alpha=0.1)])
+        pipe = Pipeline([stage, PureConformalGate(name="strat", tau=0.1)])
         out = pipe.transform_one(_obs())
         assert out.p_offline is not None and abs(float(out.p_offline) - 0.7) < 1e-9
     finally:
