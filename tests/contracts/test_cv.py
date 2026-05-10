@@ -1,4 +1,8 @@
-"""wagie.cv + wagie.cscv — purged CV walker, CSCV PBO, drift-aware wrapper."""
+"""wagie.cv + wagie.cscv — purged CV walker, CSCV PBO, drift-aware wrapper.
+
+The drift wrapper now reads from p_online + label residuals (no in_set
+dependency on a conformal calibrator).
+"""
 
 from __future__ import annotations
 
@@ -53,9 +57,6 @@ def test_cross_val_result_summary_is_non_empty_string():
 def test_drift_aware_pipeline_forwards_transform_and_learn(synthetic_minute_parquet):
     """Composition wrapper forwards transform_one + learn_one to the base."""
 
-    class _FakeStage:
-        kind = None
-
     class _FakePipeline:
         def __init__(self):
             self.transformed: list = []
@@ -93,9 +94,9 @@ def test_drift_aware_pipeline_forwards_transform_and_learn(synthetic_minute_parq
     assert out is sentinel
     assert base.transformed == [sentinel]
 
-    # learn_one with no in_set: no drift updates, no recalibration.
+    # learn_one with no p_online: no drift updates, no recalibration.
     class _Obs:
-        in_set = {}
+        p_online = None
 
     wrapper.learn_one(_Obs(), label=1)
     assert wrapper._n_drifts == 0
@@ -103,22 +104,21 @@ def test_drift_aware_pipeline_forwards_transform_and_learn(synthetic_minute_parq
     assert base.learned and base.learned[0][1] == 1
 
 
-def test_drift_aware_pipeline_resets_mondrian_calibrator_on_drift():
-    """When drift fires and a MondrianACICalibrator is in stages, it is reset."""
-    from wagie.pipeline import MondrianACICalibrator
+def test_drift_aware_pipeline_resets_stages_on_drift():
+    """When drift fires, every stage that exposes .reset() is reset."""
 
-    aci = MondrianACICalibrator()
-    reset_called = {"n": 0}
-    real_reset = aci.reset
+    class _Stage:
+        def __init__(self):
+            self.reset_count = 0
 
-    def _spy_reset():
-        reset_called["n"] += 1
-        return real_reset()
+        def reset(self):
+            self.reset_count += 1
 
-    aci.reset = _spy_reset  # type: ignore[assignment]
+    s1 = _Stage()
+    s2 = _Stage()
 
     class _Base:
-        stages = [aci]
+        stages = [s1, s2]
         def transform_one(self, obs, ctx=None): return obs
         def learn_one(self, obs, label=None): return None
         def state_dict(self): return {}
@@ -129,12 +129,13 @@ def test_drift_aware_pipeline_resets_mondrian_calibrator_on_drift():
         def update(self, x): return None
 
     class _Obs:
-        in_set = {0.10: False}
+        p_online = 0.5
 
     wrapper = DriftAwarePipeline(_Base(), _DriftAlways())
     wrapper.learn_one(_Obs(), label=1)
     assert wrapper._n_drifts == 1
-    assert reset_called["n"] == 1
+    assert s1.reset_count == 1
+    assert s2.reset_count == 1
 
 
 def test_drift_aware_pipeline_increments_on_drift(synthetic_minute_parquet):
@@ -161,7 +162,7 @@ def test_drift_aware_pipeline_increments_on_drift(synthetic_minute_parquet):
             return None
 
     class _Obs:
-        in_set = {0.10: False}
+        p_online = 0.7
 
     wrapper = DriftAwarePipeline(_FakeBase(), _DriftAlways())
     wrapper.learn_one(_Obs(), label=1)
@@ -186,14 +187,8 @@ def test_cross_validation_runs_with_synthetic_parquet(synthetic_minute_parquet):
             "data": {"parquet_path": str(synthetic_minute_parquet), "m_minutes": 20},
             "model": {
                 "catboost_path": None,
-                "aci": {
-                    "alphas": [0.05, 0.10, 0.20],
-                    "gamma": 0.01,
-                    "n_regimes": 3,
-                    "q_init": 0.4,
-                },
             },
-            "strategy": {"kind": "pure_conformal", "alpha": 0.10},
+            "strategy": {"kind": "threshold_gate", "tau": 0.20},
             "runtime": {"warmup_samples": 5},
         }
     )

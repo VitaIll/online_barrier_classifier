@@ -5,6 +5,8 @@ Subcommands:
     wagie experiment list                 # list runs in artifacts/runs/
     wagie experiment show <run_id>        # echo metrics.json + report.md path
     wagie cv <spec.yaml>                  # cross-validation
+    wagie data synth                      # write a deterministic synthetic
+                                          # 1m parquet to data/synthetic/
     wagie info                            # version + public surface
 
 Nothing else in the repo provides a CLI. Custom scripts are forbidden — every
@@ -23,6 +25,19 @@ from pathlib import Path
 def _cmd_experiment_run(args) -> int:
     from wagie.experiments import ExperimentProtocol, ExperimentSpec
     spec = ExperimentSpec.from_yaml(args.spec)
+    # Light-touch fallback: if the spec points at the canonical synthetic
+    # parquet but it isn't there yet, try the cleansed-data location next.
+    data_path = Path(spec.wagie.data.parquet_path)
+    if not data_path.is_file():
+        candidates = [
+            Path("data/synthetic/btcusdt_1m.parquet"),
+            Path("data/cleansed_data/BTCUSDT/1m.parquet"),
+        ]
+        for cand in candidates:
+            if cand.is_file():
+                spec.wagie.data.parquet_path = str(cand)
+                logging.info(f"data path fallback: {data_path} -> {cand}")
+                break
     result = ExperimentProtocol().run(spec, spec_path=Path(args.spec))
     print(result.headline)
     print(f"out_dir: {result.out_dir}")
@@ -87,6 +102,61 @@ def _cmd_cv(args) -> int:
     return 0
 
 
+def _cmd_data_synth(args) -> int:
+    """Write a deterministic synthetic 1m BTCUSDT parquet.
+
+    Lets users run `wagie experiment run experiments/baseline.yaml` from a
+    fresh clone with no cleansed_data on disk.
+    """
+    import numpy as np
+    import polars as pl
+
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    rng = np.random.default_rng(int(args.seed))
+    n = int(args.n_minutes)
+    sigma = float(args.sigma)
+
+    log_ret = rng.normal(0.0, sigma, size=n)
+    log_ret[0] = 0.0
+    log_close = float(args.start_log_price) + np.cumsum(log_ret)
+    close = np.exp(log_close)
+    bar_range = np.abs(rng.normal(0.0, sigma * 1.2, size=n))
+    high = close * (1.0 + bar_range)
+    low = close * (1.0 - bar_range)
+    open_ = np.r_[close[0], close[:-1]]
+    volume = np.abs(rng.normal(100.0, 20.0, size=n))
+
+    open_time = np.arange(n) * 60_000 + int(args.start_ms)
+    close_time = open_time + 59_999
+
+    # 4-decimal close per ask: round all OHLC to 4 decimals.
+    close = np.round(close, 4)
+    open_ = np.round(open_, 4)
+    high = np.round(high, 4)
+    low = np.round(low, 4)
+    volume = np.round(volume, 4)
+
+    df = pl.DataFrame({
+        "open_time": open_time,
+        "open": open_,
+        "high": high,
+        "low": low,
+        "close": close,
+        "volume": volume,
+        "close_time": close_time,
+        "quote_volume": np.round(volume * close, 4),
+        "trades": np.full(n, 50, dtype=np.int64),
+        "taker_buy_base": np.round(volume * 0.5, 4),
+        "taker_buy_quote": np.round(volume * close * 0.5, 4),
+        "segment_id": np.zeros(n, dtype=np.int64),
+    })
+    df.write_parquet(str(out_path))
+    print(f"wrote {out_path}  rows={n}  bytes={out_path.stat().st_size}")
+    return 0
+
+
 def _cmd_info(args) -> int:
     import wagie
     print(f"wagie {wagie.__version__}")
@@ -123,6 +193,31 @@ def main(argv=None) -> int:
     cv_p.add_argument("--n-test-folds", type=int, default=2)
     cv_p.add_argument("--embargo", type=int, default=5)
     cv_p.set_defaults(func=_cmd_cv)
+
+    data = sub.add_parser("data", help="Data utilities (synth fixtures).")
+    data_sub = data.add_subparsers(dest="data_cmd", required=True)
+    d_synth = data_sub.add_parser(
+        "synth",
+        help="Write a deterministic synthetic 1m BTCUSDT parquet.",
+    )
+    d_synth.add_argument(
+        "--out", type=str, default="data/synthetic/btcusdt_1m.parquet",
+        help="destination path (default data/synthetic/btcusdt_1m.parquet)",
+    )
+    d_synth.add_argument(
+        "--n-minutes", dest="n_minutes", type=int, default=129_600,
+        help="number of 1-minute bars (default: ~3 months = 129600)",
+    )
+    d_synth.add_argument("--sigma", type=float, default=0.0008,
+                         help="per-bar log-return stddev (default 0.0008)")
+    d_synth.add_argument("--seed", type=int, default=42)
+    d_synth.add_argument("--start-log-price", dest="start_log_price",
+                         type=float, default=10.0,
+                         help="initial log-price (default 10.0 ≈ $22026)")
+    d_synth.add_argument("--start-ms", dest="start_ms",
+                         type=int, default=1_700_000_000_000,
+                         help="initial open_time in ms (default 2023-11-14)")
+    d_synth.set_defaults(func=_cmd_data_synth)
 
     info_p = sub.add_parser("info", help="Print wagie version + public surface.")
     info_p.set_defaults(func=_cmd_info)

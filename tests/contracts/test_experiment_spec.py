@@ -125,8 +125,11 @@ def test_cv_spec_typo_rejected() -> None:
 
 
 def test_training_spec_typo_rejected() -> None:
+    """TrainingSpec uses extra='forbid' — unknown fields raise."""
     with pytest.raises(ValidationError):
         TrainingSpec(warm_calibrator=False)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        TrainingSpec(warm_calibrator_quantiles=True)  # type: ignore[call-arg]
 
 
 def test_nested_typo_in_features_through_top_spec() -> None:
@@ -187,9 +190,11 @@ def test_cv_spec_defaults() -> None:
 
 
 def test_training_spec_defaults() -> None:
+    """TrainingSpec is intentionally near-empty after the Mondrian-ACI
+    removal (the streaming ARF needs no warm-up)."""
     t = TrainingSpec()
-    assert t.warm_calibrator_quantiles is False
-    assert t.warm_train_frac == 0.6
+    # Stable empty shape — no fields to assert beyond construction.
+    assert isinstance(t, TrainingSpec)
 
 
 def test_artifacts_spec_defaults() -> None:

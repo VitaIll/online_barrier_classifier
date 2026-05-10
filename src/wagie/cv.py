@@ -171,12 +171,13 @@ def cross_validation(
 # -----------------------------------------------------------------------------
 
 class DriftAwarePipeline:
-    """Wraps a Pipeline + a drift detector. On drift, recalibrates the ACI stage.
+    """Wraps a Pipeline + a drift detector.
 
     Composition (NOT inheritance): a thin layer that:
       - forwards transform/learn to the base Pipeline
-      - feeds prediction errors to the drift detector
-      - on drift, calls .reset() on the calibrator stage(s)
+      - feeds prediction errors (Brier-style residuals on p_online) to the
+        drift detector
+      - on drift, calls .reset() on every stage that exposes one
     """
 
     name: str = "drift_aware_pipeline"
@@ -191,21 +192,29 @@ class DriftAwarePipeline:
         return self.base.transform_one(obs, ctx)
 
     def learn_one(self, obs, label=None):
-        # Feed drift detector with miscoverage error from prior predictions
-        if label is not None and obs.in_set:
-            for a, in_set in obs.in_set.items():
-                err = 0 if (in_set and label == 1) else 1
-                self.drift_detector.update(err)
-                if getattr(self.drift_detector, "drift_detected", False):
-                    self._on_drift()
-                    break
+        # Feed drift detector with the absolute residual on p_online — drops
+        # the conformal in_set predicate dependency entirely.
+        if label is not None:
+            p = getattr(obs, "p_online", None)
+            if p is not None:
+                try:
+                    err = abs(float(p) - float(int(label)))
+                except (TypeError, ValueError):
+                    err = None
+                if err is not None:
+                    self.drift_detector.update(err)
+                    if getattr(self.drift_detector, "drift_detected", False):
+                        self._on_drift()
         return self.base.learn_one(obs, label)
 
     def _on_drift(self):
-        from wagie.pipeline import MondrianACICalibrator
-        for s in self.base.stages:
-            if isinstance(s, MondrianACICalibrator):
+        # Reset every stage that exposes .reset(); the ARF online layer
+        # restarts cleanly, the strategy is stateless, etc.
+        for s in getattr(self.base, "stages", []):
+            try:
                 s.reset()
+            except Exception:
+                pass
         self._n_drifts += 1
 
     def state_dict(self):

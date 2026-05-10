@@ -1,7 +1,7 @@
 """Engine builder + entry point used by ExperimentProtocol and wagie.cv.
 
 Wires the canonical pipeline (BaseBarFeatures | FeatureBuilder | Regime?
-| CatBoost? | ARF | ACI | LabelBuffer | Strategy) and runs the engine.
+| CatBoost? | ARF | LabelBuffer | Strategy) and runs the engine.
 End-users go through `wagie experiment run <spec.yaml>`; this module is the
 implementation detail underneath.
 """
@@ -24,7 +24,6 @@ from wagie.io.sources import ParquetReplaySource
 from wagie.pipeline import (
     FrozenCatBoostPredictor,
     LabelBuffer,
-    MondrianACICalibrator,
     OnlineARFCorrector,
     Pipeline,
 )
@@ -70,24 +69,14 @@ def build_pipeline(
         selected_features=selected_features,
     ))
 
-    stages.append(MondrianACICalibrator(
-        alphas=tuple(cfg.model.aci.alphas),
-        gamma=cfg.model.aci.gamma,
-        n_regimes=cfg.model.aci.n_regimes,
-        q_init=cfg.model.aci.q_init,
-        q_init_by_regime=cfg.model.aci.q_init_by_regime,
-    ))
-
     label_buf = LabelBuffer(alpha_label=cfg.broker.label_alpha)
     stages.append(label_buf)
 
-    strat_kwargs: dict = {"alpha": cfg.strategy.alpha}
-    if cfg.strategy.k is not None:
-        strat_kwargs["k"] = cfg.strategy.k
+    strat_kwargs: dict = {}
     if cfg.strategy.tau is not None:
         strat_kwargs["tau"] = cfg.strategy.tau
-    if cfg.strategy.layer is not None:
-        strat_kwargs["layer"] = cfg.strategy.layer
+    if cfg.strategy.k is not None:
+        strat_kwargs["k"] = cfg.strategy.k
     strat_kwargs.update(cfg.strategy.extra)
     strat_kwargs.setdefault("take_profit", LogReturn(cfg.broker.take_profit_log))
     strat_kwargs.setdefault("stop_loss", LogReturn(cfg.broker.stop_loss_log))

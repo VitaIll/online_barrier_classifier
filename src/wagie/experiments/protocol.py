@@ -12,15 +12,14 @@ Or via CLI:
 
 Stages (one tick — backtest):
     1. Resolve out_dir, write spec snapshot
-    2. (Optional) training: warm calibrator quantiles from a train slice
-    3. Build pipeline + engine via wagie.run.run()
-    4. Run engine event loop → EngineResult
-    5. MetricsBattery.compute → MetricsReport
-    6. ChartBattery.render_all → png paths
-    7. Report.render → report.md
-    8. Persist metrics.json + state hash
+    2. Build pipeline + engine via wagie.run.run()
+    3. Run engine event loop → EngineResult
+    4. MetricsBattery.compute → MetricsReport
+    5. ChartBattery.render_all → png paths
+    6. Report.render → report.md
+    7. Persist metrics.json + state hash
 
-When `spec.cv` is set, the protocol delegates to `wagie.cv.cross_validation`
+When ``spec.cv`` is set, the protocol delegates to ``wagie.cv.cross_validation``
 and aggregates per-fold metrics into the same MetricsReport / Report shape.
 """
 
@@ -55,8 +54,8 @@ def _make_run_id(spec: ExperimentSpec) -> str:
 class ExperimentProtocol:
     """The ONE protocol. All experiments flow through here.
 
-    `metrics_battery`, `chart_battery`, `report` are injectable for tests
-    and bespoke users; defaults are the canonical shipped batteries.
+    ``metrics_battery``, ``chart_battery``, ``report`` are injectable for
+    tests and bespoke users; defaults are the canonical shipped batteries.
     """
 
     metrics_battery: MetricsBattery = None
@@ -100,10 +99,6 @@ class ExperimentProtocol:
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "spec.yaml").write_text(spec.to_yaml(), encoding="utf-8")
         logger.info(f"experiment[backtest] run_id={run_id} out_dir={out_dir}")
-
-        # Optional training step: warm Mondrian-ACI quantiles
-        if spec.training.warm_calibrator_quantiles:
-            self._warm_calibrator(spec)
 
         feature_builder, base_bar, regime = _build_features(spec)
         self.metrics_battery.m_minutes = spec.wagie.data.m_minutes
@@ -220,31 +215,6 @@ class ExperimentProtocol:
             spec_hash=spec.hash(),
         )
 
-    # -----------------------------------------------------------------
-    # Training helpers
-    # -----------------------------------------------------------------
-
-    def _warm_calibrator(self, spec: ExperimentSpec) -> None:
-        """Warm-start `q_init_by_regime` from the train slice. Mutates
-        `spec.wagie.model.aci.q_init_by_regime` in place."""
-        try:
-            from wagie.training import warm_online_quantiles
-        except Exception as e:
-            logger.warning(f"warm_calibrator skipped: {e}")
-            return
-        try:
-            q_init_by_regime = warm_online_quantiles(
-                parquet_path=spec.wagie.data.parquet_path,
-                m_minutes=spec.wagie.data.m_minutes,
-                alphas=tuple(spec.wagie.model.aci.alphas),
-                train_frac=spec.training.warm_train_frac,
-                n_regimes=spec.wagie.model.aci.n_regimes,
-            )
-            spec.wagie.model.aci.q_init_by_regime = q_init_by_regime
-            logger.info(f"warmed q_init_by_regime over {len(q_init_by_regime)} alphas")
-        except Exception as e:
-            logger.warning(f"warm_calibrator failed: {e}")
-
     def _render_cv_charts(self, cv_result, out_dir: Path) -> dict[str, Path]:
         import matplotlib.pyplot as plt
         from wagie.charts.theme import PALETTE, apply_theme, figsize
@@ -299,7 +269,7 @@ def _cv_to_metrics_dict(cv_result, *, m_minutes: int) -> dict:
             "max_drawdown_log": 0.0, "cdar_5pct_log": 0.0,
         },
         "brier": 0.0, "ece": 0.0,
-        "reliability": [], "coverage": [],
+        "reliability": [], "calibration_by_regime": [],
         "roc_auc": 0.5, "pr_auc": 0.0,
         "n_decisions": agg_n_trades, "n_filled": 0,
         "n_actions_approved": 0, "n_actions_rejected": 0,

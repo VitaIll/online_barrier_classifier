@@ -1,10 +1,10 @@
-"""Integration tests for the four ExperimentProtocol modes:
+"""Integration tests for the ExperimentProtocol modes:
 
     1. CV mode    — spec.cv.enabled=True dispatches to wagie.cv
-    2. Training   — warm_calibrator_quantiles populates aci.q_init_by_regime
-    3. Charts off — no charts/ dir is produced
-    4. Report off — no report.md
-    5. run_id     — timestamp_<name>_<hash> regex
+    2. Charts off — no charts/ dir is produced
+    3. Report off — no report.md
+    4. run_id     — timestamp_<name>_<hash> regex
+    5. Backtest mode emits non-zero Brier (calibration data flows through).
 """
 
 from __future__ import annotations
@@ -29,10 +29,8 @@ def _base_spec_dict(parquet: Path, out_dir: Path, name: str = "modes") -> dict:
             "model": {
                 "catboost_path": None,
                 "arf": {"n_models": 5, "lambda_value": 6.0, "seed": 42},
-                "aci": {"alphas": [0.05, 0.10, 0.20], "gamma": 0.01,
-                        "n_regimes": 3, "q_init": 0.5},
             },
-            "strategy": {"kind": "pure_conformal", "alpha": 0.10},
+            "strategy": {"kind": "threshold_gate", "tau": 0.20},
             "broker": {"inventory_cap": 5},
             "runtime": {"warmup_samples": 10},
         },
@@ -97,33 +95,6 @@ def test_protocol_cv_mode_emits_per_fold_and_pbo(
     assert sharpe_png.stat().st_size > 100
 
 
-# --------------------------- Training warm-up -------------------------------
-
-def test_training_warm_calibrator_populates_q_init_by_regime(
-    synthetic_minute_parquet, tmp_path,
-):
-    """warm_calibrator_quantiles=True ⇒ spec.wagie.model.aci.q_init_by_regime
-    is populated by the protocol before the engine runs."""
-    raw = _base_spec_dict(synthetic_minute_parquet, tmp_path / "runs", name="warm")
-    raw["training"] = {"warm_calibrator_quantiles": True, "warm_train_frac": 0.5}
-    spec = ExperimentSpec.model_validate(raw)
-
-    assert spec.wagie.model.aci.q_init_by_regime is None  # pre-warm
-
-    ExperimentProtocol().run(spec)
-
-    q = spec.wagie.model.aci.q_init_by_regime
-    assert q is not None, "warm_calibrator did not populate q_init_by_regime"
-    assert isinstance(q, dict)
-    # Expect one entry per alpha.
-    expected_alphas = set(float(a) for a in spec.wagie.model.aci.alphas)
-    assert set(float(k) for k in q.keys()) == expected_alphas
-    # Each alpha maps to a regime → quantile dict.
-    for alpha, per_regime in q.items():
-        assert isinstance(per_regime, dict), \
-            f"alpha={alpha} should map to regime dict, got {type(per_regime)}"
-
-
 # ----------------------------- Charts disabled -----------------------------
 
 def test_charts_disabled_no_charts_dir(synthetic_minute_parquet, tmp_path):
@@ -153,3 +124,20 @@ def test_report_disabled_no_report_md(synthetic_minute_parquet, tmp_path):
     report_md = result.out_dir / "report.md"
     assert not report_md.exists(), "report.md should not exist when disabled"
     assert result.report_path is None
+
+
+# ----------------------------- Calibration data flows --------------------
+
+def test_backtest_mode_emits_nonzero_brier_and_ece(synthetic_minute_parquet, tmp_path):
+    """The engine populates label_history / p_online_history; MetricsBattery
+    must consume them automatically and yield non-zero Brier on the smoke
+    fixture."""
+    spec = ExperimentSpec.model_validate(
+        _base_spec_dict(synthetic_minute_parquet, tmp_path / "runs",
+                        name="califlow"),
+    )
+    result = ExperimentProtocol().run(spec)
+    metrics = json.loads((result.out_dir / "metrics.json").read_text())
+    assert metrics["brier"] > 0.0, \
+        f"Brier should be > 0 on synthetic fixture; got {metrics['brier']}"
+    assert metrics["ece"] >= 0.0

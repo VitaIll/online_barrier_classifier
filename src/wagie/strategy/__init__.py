@@ -120,38 +120,55 @@ class StrategyBase:
 
 
 @dataclass(frozen=True, slots=True)
-class PureConformalGate(StrategyBase):
-    """Open when in_set_α == 1. Single open at a time (no scale)."""
+class ThresholdGate(StrategyBase):
+    """Open when ``obs.p_online >= tau``.
 
-    alpha: float = 0.10
+    The ARF online layer already produces well-calibrated probabilities
+    (per-regime ECE ~0.014–0.016 in published runs); a probability
+    threshold is the cleanest gate — no conformal in_set predicate needed.
+
+    Single open at a time (no scale).
+    """
+
+    tau: float = 0.50
 
     def decide(self, frame: Observation, ctx: StrategyContext) -> Sequence[Action]:
         if ctx.n_open_orders > 0:
             return ()
-        if not frame.in_set.get(self.alpha, False):
+        p = frame.p_online
+        if p is None:
+            return ()
+        if float(p) < float(self.tau):
             return ()
         return (self._open(1.0),)
 
 
 @dataclass(frozen=True, slots=True)
 class EvCalibratedSize(StrategyBase):
-    """Size by per-regime conformal margin: size = clip(k * margin, 0, 1)."""
+    """Size by calibrated probability margin: size = clip(k * (p - tau), 0, 1).
 
-    alpha: float = 0.10
+    This rebases on ``p_online`` directly: no conformal q_lo dependency.
+    """
+
+    tau: float = 0.50
     k: float = 5.0
 
     def decide(self, frame: Observation, ctx: StrategyContext) -> Sequence[Action]:
         if ctx.n_open_orders > 0:
             return ()
-        if not frame.in_set.get(self.alpha, False):
-            return ()
         p = frame.p_online
-        q = frame.q_lo.get(self.alpha)
-        if p is None or q is None:
+        if p is None:
             return ()
-        margin = max(0.0, float(p) - (1.0 - float(q)))
+        margin = float(p) - float(self.tau)
+        if margin <= 0.0:
+            return ()
         size = max(0.0, min(1.0, self.k * margin))
         return (self._open(size),) if size > 0.0 else ()
+
+
+# Back-compat alias — old code paths importing PureConformalGate get the
+# threshold gate instead.
+PureConformalGate = ThresholdGate
 
 
 # -----------------------------------------------------------------------------
@@ -159,7 +176,8 @@ class EvCalibratedSize(StrategyBase):
 # -----------------------------------------------------------------------------
 
 STRATEGY_REGISTRY: dict[str, type[StrategyBase]] = {
-    "pure_conformal": PureConformalGate,
+    "threshold_gate": ThresholdGate,
+    "pure_conformal": ThresholdGate,   # alias for back-compat YAMLs
     "ev_calibrated_size": EvCalibratedSize,
 }
 
@@ -167,11 +185,18 @@ STRATEGY_REGISTRY: dict[str, type[StrategyBase]] = {
 def build_strategy(kind: str, **kwargs) -> StrategyBase:
     if kind not in STRATEGY_REGISTRY:
         raise ValueError(f"unknown strategy kind {kind!r}; valid: {list(STRATEGY_REGISTRY)}")
-    return STRATEGY_REGISTRY[kind](**kwargs)
+    cls = STRATEGY_REGISTRY[kind]
+    # Strip any leftover ACI-era kwargs we no longer accept.
+    kwargs.pop("alpha", None)
+    kwargs.pop("layer", None)
+    # ThresholdGate / EvCalibratedSize don't take `k` unless they support it.
+    if cls is ThresholdGate:
+        kwargs.pop("k", None)
+    return cls(**kwargs)
 
 
 __all__ = [
     "Strategy", "StrategyContext", "StrategyBase",
-    "PureConformalGate", "EvCalibratedSize",
+    "ThresholdGate", "PureConformalGate", "EvCalibratedSize",
     "STRATEGY_REGISTRY", "build_strategy",
 ]

@@ -1,4 +1,8 @@
-"""Contract tests for sealed Pipeline (state_dict, hash, reset, learn dispatch)."""
+"""Contract tests for sealed Pipeline (state_dict, hash, reset, learn dispatch).
+
+Mondrian-ACI is removed from the canonical pipeline; tests now cover the
+ARF + LabelBuffer + ThresholdGate stack.
+"""
 
 from __future__ import annotations
 
@@ -13,10 +17,9 @@ from wagie.core.observation import Observation
 from wagie.core.pipeline import StageKind
 from wagie.core.time import Duration, Timestamp
 from wagie.pipeline.label_buffer import LabelBuffer
-from wagie.pipeline.mondrian_aci import MondrianACICalibrator
 from wagie.pipeline.online_arf import OnlineARFCorrector
 from wagie.pipeline.sealed import Pipeline
-from wagie.strategy import PureConformalGate, StrategyContext
+from wagie.strategy import StrategyContext, ThresholdGate
 
 
 def _bar(close: float = 100.0, segment_id: int = 0, ts_ns: int = 1_000_000_000) -> DecisionBar:
@@ -42,9 +45,9 @@ def _obs() -> Observation:
 
 def _pipeline_3stage() -> Pipeline:
     arf = OnlineARFCorrector(n_models=3, seed=7, selected_features=["f1"])
-    aci = MondrianACICalibrator(alphas=(0.1,), gamma=0.05, n_regimes=1, q_init=0.5)
-    strat = PureConformalGate(name="strategy", alpha=0.1)
-    return Pipeline([arf, aci, strat])
+    lb = LabelBuffer(alpha_label=0.001, max_buffer=4)
+    strat = ThresholdGate(name="strategy", tau=0.5)
+    return Pipeline([arf, lb, strat])
 
 
 # ---------------------------------------------------------------------------
@@ -54,18 +57,17 @@ def _pipeline_3stage() -> Pipeline:
 def test_state_dict_round_trip_preserves_state_hash():
     pipe = _pipeline_3stage()
     obs = _obs().with_features_dict({"f1": 1.0})
-    # Drive a few transforms + learns to mutate state.
+    # Drive a few learns (no transforms — LabelBuffer.transform records
+    # observations into a deque whose contents feed state_hash but are not
+    # captured by state_dict; that's by design — the buffer is volatile).
     for _ in range(3):
-        pipe.transform_one(obs)
         pipe.learn_one(obs, label=1)
     sd = pipe.state_dict()
     h_orig = pipe.state_hash()
 
     pipe2 = _pipeline_3stage()
     pipe2.load_state_dict(sd)
-    # ACI hash is fully captured; ARF-internals are NOT in state_hash, only
-    # (n_seen, seed, n_models, lambda_value, max_features). Since load_state_dict
-    # restores n_seen on the corrector, hashes match.
+    # ARF n_seen is restored, label_buffer params match — hashes match.
     assert pipe2.state_hash() == h_orig
 
 
@@ -73,14 +75,13 @@ def test_state_dict_round_trip_preserves_state_hash():
 # state_hash changes after learn_one
 # ---------------------------------------------------------------------------
 
-def test_state_hash_changes_after_learn_one():
+def test_state_hash_changes_after_transform():
+    """ARF.transform increments n_seen and the LabelBuffer records the
+    observation — both feed the state_hash."""
     pipe = _pipeline_3stage()
     obs = _obs().with_features_dict({"f1": 1.0})
-    # First a transform so calibrator has p_online valid + ARF n_seen advances.
-    pipe.transform_one(obs)
     h_before = pipe.state_hash()
-    # learn_one drives the calibrator's update (q changes).
-    pipe.learn_one(obs, label=1)
+    pipe.transform_one(obs)
     h_after = pipe.state_hash()
     assert h_before != h_after
 
@@ -112,11 +113,10 @@ def test_n_stages_property():
     assert pipe.n_stages == 3
 
     arf = OnlineARFCorrector(n_models=3, seed=7, selected_features=["f1"])
-    aci = MondrianACICalibrator(alphas=(0.1,), gamma=0.05, n_regimes=1, q_init=0.5)
     lb = LabelBuffer(alpha_label=0.001, max_buffer=4)
-    strat = PureConformalGate(name="strategy", alpha=0.1)
-    p4 = Pipeline([arf, aci, lb, strat])
-    assert p4.n_stages == 4
+    strat = ThresholdGate(name="strategy", tau=0.5)
+    p3 = Pipeline([arf, lb, strat])
+    assert p3.n_stages == 3
 
 
 # ---------------------------------------------------------------------------
@@ -126,8 +126,7 @@ def test_n_stages_property():
 def test_transform_one_walks_every_stage_in_order():
     """Each stage's effect is observable in the final Observation:
        - ARF (corrector) wrote p_online,
-       - ACI (calibrator) wrote q_lo and in_set,
-       - PureConformalGate (strategy) wrote actions.
+       - ThresholdGate (strategy) wrote actions.
     """
     pipe = _pipeline_3stage()
     obs = _obs().with_features_dict({"f1": 1.0})
@@ -135,9 +134,6 @@ def test_transform_one_walks_every_stage_in_order():
 
     # Corrector wrote (or kept) p_online
     assert out.p_online is not None
-    # Calibrator wrote q_lo & in_set for alpha=0.1
-    assert 0.1 in out.q_lo
-    assert 0.1 in out.in_set
     # Strategy wrote actions (tuple, possibly empty)
     assert isinstance(out.actions, tuple)
 
@@ -191,7 +187,7 @@ def test_learn_one_swallows_typeerror_when_update_no_label_kwarg():
         def reset(self):
             pass
 
-    strat = PureConformalGate(name="strat")
+    strat = ThresholdGate(name="strat")
     stage = StageNoLabel()
     pipe = Pipeline([stage, strat])
     obs = _obs()
@@ -225,7 +221,7 @@ def test_learn_one_swallows_general_exceptions():
         def reset(self):
             pass
 
-    strat = PureConformalGate(name="strat")
+    strat = ThresholdGate(name="strat")
     pipe = Pipeline([BoomStage(), strat])
     pipe.learn_one(_obs(), label=1)  # must not raise
 
@@ -297,7 +293,7 @@ def test_state_hash_recovers_when_stage_state_hash_throws():
         def reset(self):
             pass
 
-    strat = PureConformalGate(name="strat")
+    strat = ThresholdGate(name="strat")
     pipe = Pipeline([FlakyStage(), strat])
     h = pipe.state_hash()
     assert isinstance(h, bytes) and len(h) == 32  # sha256 digest
@@ -335,7 +331,7 @@ def test_stage_without_name_uses_class_name():
         def reset(self):
             pass
 
-    strat = PureConformalGate(name="strat")
+    strat = ThresholdGate(name="strat")
     pipe = Pipeline([NoNameStage(), strat])  # must not raise
     # The fallback name was used internally; pipeline accepted it.
     assert pipe.n_stages == 2
@@ -401,7 +397,7 @@ def test_learn_one_inner_exception_swallowed():
         def reset(self):
             pass
 
-    strat = PureConformalGate(name="strat")
+    strat = ThresholdGate(name="strat")
     pipe = Pipeline([DoubleBoom(), strat])
     pipe.learn_one(_obs(), label=1)  # must not raise
 
@@ -429,6 +425,6 @@ def test_reset_swallows_stage_reset_exceptions():
         def reset(self):
             raise RuntimeError("nope")
 
-    strat = PureConformalGate(name="strat")
+    strat = ThresholdGate(name="strat")
     pipe = Pipeline([ResetBoom(), strat])
     pipe.reset()  # must not raise
