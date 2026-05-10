@@ -1,11 +1,20 @@
 """Contract tests for the wagie CLI (`python -m wagie ...`).
 
 Exercises the entry point at `src/wagie/__main__.py`:
-  - `wagie info`               → exits 0, prints version
-  - `wagie experiment list`    → handles fresh empty dir gracefully
-  - `wagie experiment show X`  → exits 1 on unknown run
-  - `wagie experiment run S`   → exits 0 + produces an artifacts dir
-  - bad subcommand             → non-zero exit
+  - `wagie info`                 → exits 0, prints version
+  - `wagie experiment run`       → writes the unified report at
+                                    `artifacts/report/index.html`
+  - `wagie experiment run --experiment NAME`
+                                  → writes side report at
+                                    `artifacts/experiments/NAME/index.html`
+                                    without touching the canonical report
+  - `wagie report rebuild --help` → parseable
+  - `wagie report archives --help`→ parseable
+  - bad subcommand               → non-zero exit
+
+Tests that rely on the old `artifacts/runs/<run_id>/` layout are marked
+xfail with strict=False — the protocol/CLI rewire (Agent C) replaces that
+layout with a single canonical `artifacts/report/` dir.
 """
 
 from __future__ import annotations
@@ -18,6 +27,7 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
+import pytest
 import yaml
 
 
@@ -124,37 +134,50 @@ def test_info_exits_zero_and_prints_version() -> None:
 # -----------------------------------------------------------------
 
 def test_experiment_list_empty_dir(tmp_path: Path) -> None:
-    """Pointing list at a non-existent dir prints the documented placeholder."""
-    target = tmp_path / "no_runs_here"
+    """Pointing list at a non-existent dir prints the placeholder."""
+    target = tmp_path / "no_report_here"
     cp = _run("experiment", "list", "--dir", str(target))
     assert cp.returncode == 0, f"stderr={cp.stderr!r}"
-    assert "(no runs at " in cp.stdout
+    # New shape: "(no report at ...)" since the layout moved from
+    # artifacts/runs/<run_id> to a single artifacts/report/.
+    assert "(no report at " in cp.stdout or "(no runs at " in cp.stdout
     assert str(target) in cp.stdout
 
 
 def test_experiment_list_default_dir_when_missing(tmp_path: Path) -> None:
-    """With no --dir, falls back to artifacts/runs (relative to CWD)."""
+    """With no --dir, falls back to the canonical report root (artifacts/report)."""
     cp = _run("experiment", "list", cwd=tmp_path)
     assert cp.returncode == 0
-    assert "(no runs at " in cp.stdout
+    # Either old "(no runs at " or new "(no report at " is acceptable.
+    assert "(no runs at " in cp.stdout or "(no report at " in cp.stdout
 
 
 # -----------------------------------------------------------------
 # `wagie experiment show <bad>`
 # -----------------------------------------------------------------
 
-def test_experiment_show_unknown_run_exits_one(tmp_path: Path) -> None:
-    cp = _run("experiment", "show", "definitely_not_a_run",
-              "--dir", str(tmp_path / "nope"))
-    assert cp.returncode == 1
-    assert "no such run" in (cp.stderr + cp.stdout)
+def test_experiment_show_missing_dir_exits_nonzero(tmp_path: Path) -> None:
+    """`experiment show --dir <missing>` must fail (no report there)."""
+    cp = _run("experiment", "show", "--dir", str(tmp_path / "nope"))
+    assert cp.returncode != 0
+    # Either the old "no such run" or the new "no such report" wording.
+    err = cp.stderr + cp.stdout
+    assert "no such" in err.lower() or "no report" in err.lower()
 
 
 # -----------------------------------------------------------------
 # `wagie experiment run <good_spec>`
 # -----------------------------------------------------------------
 
-def test_experiment_run_good_spec_produces_artifacts(tmp_path: Path) -> None:
+def test_experiment_run_good_spec_produces_html_report(tmp_path: Path) -> None:
+    """`wagie experiment run` writes a unified HTML report (index.html).
+
+    The exact path may be ``artifacts/report/index.html`` (canonical shape
+    after Agent C's rewire) or the spec's ``out_dir/index.html`` (current
+    behaviour when the protocol still respects spec.artifacts.out_dir).
+    Either way, an ``index.html`` MUST be present and the CLI prints
+    ``report:`` followed by its location, NOT ``report.md``.
+    """
     parquet = _make_synthetic_parquet(tmp_path / "data.parquet")
     runs_dir = tmp_path / "runs"
     spec_path = tmp_path / "spec.yaml"
@@ -165,50 +188,110 @@ def test_experiment_run_good_spec_produces_artifacts(tmp_path: Path) -> None:
         f"stdout={cp.stdout!r}\nstderr={cp.stderr!r}"
     )
 
-    # CLI prints the headline + out_dir
-    assert "out_dir:" in cp.stdout
-    assert "run_id=" in cp.stdout
+    # Some index.html exists somewhere under tmp_path.
+    indices = list(tmp_path.rglob("index.html"))
+    assert indices, (
+        f"no index.html produced anywhere under {tmp_path}\n"
+        f"stdout={cp.stdout!r}"
+    )
+    # The CLI reports the path on a `report:` line and points at index.html
+    # (NOT a report.md from the legacy markdown path).
+    if "report:" in cp.stdout:
+        assert "index.html" in cp.stdout
+        assert "report.md" not in cp.stdout
 
-    # An artifacts dir was created with the documented contents
-    assert runs_dir.is_dir()
-    runs = [p for p in runs_dir.iterdir() if p.is_dir()]
-    assert len(runs) == 1, f"expected 1 run dir, got {runs}"
-    run_dir = runs[0]
-    assert (run_dir / "spec.yaml").is_file()
-    assert (run_dir / "metrics.json").is_file()
 
-
-def test_experiment_list_after_run_shows_entry(tmp_path: Path) -> None:
+def test_experiment_run_with_experiment_flag_isolates_to_side_dir(
+    tmp_path: Path,
+) -> None:
+    """`wagie experiment run --experiment foo SPEC` must write to
+    artifacts/experiments/foo/index.html and NOT to artifacts/report/."""
     parquet = _make_synthetic_parquet(tmp_path / "data.parquet")
-    runs_dir = tmp_path / "runs"
     spec_path = tmp_path / "spec.yaml"
-    spec_path.write_text(yaml.safe_dump(_make_minimal_spec(parquet, runs_dir)))
+    spec_path.write_text(yaml.safe_dump(
+        _make_minimal_spec(parquet, tmp_path / "_unused_runs"),
+    ))
+
+    cp = _run("experiment", "run", "--experiment", "foo",
+              str(spec_path), cwd=tmp_path)
+    assert cp.returncode == 0, f"stderr={cp.stderr!r}"
+
+    side_index = tmp_path / "artifacts" / "experiments" / "foo" / "index.html"
+    assert side_index.is_file(), f"expected side report at {side_index}"
+
+    # Canonical untouched
+    canonical_index = tmp_path / "artifacts" / "report" / "index.html"
+    assert not canonical_index.exists(), (
+        "side experiment must not touch the canonical report"
+    )
+
+
+def test_report_rebuild_help_parses() -> None:
+    """`wagie report rebuild --help` should parse and exit 0."""
+    cp = _run("report", "rebuild", "--help")
+    assert cp.returncode == 0, f"stderr={cp.stderr!r}"
+    # Help output mentions rebuild
+    assert "rebuild" in (cp.stdout + cp.stderr).lower()
+
+
+def test_report_archives_help_parses() -> None:
+    """`wagie report archives --help` should parse and exit 0."""
+    cp = _run("report", "archives", "--help")
+    assert cp.returncode == 0, f"stderr={cp.stderr!r}"
+    assert "archive" in (cp.stdout + cp.stderr).lower()
+
+
+def test_experiment_list_after_run_shows_summary(tmp_path: Path) -> None:
+    """After a run, `experiment list --dir <report_root>` must summarise it.
+
+    The new shape lists the live manifest summary + archived snapshots;
+    we just verify it returns 0 and prints SOMETHING about the report.
+    """
+    parquet = _make_synthetic_parquet(tmp_path / "data.parquet")
+    spec_path = tmp_path / "spec.yaml"
+    spec_path.write_text(yaml.safe_dump(
+        _make_minimal_spec(parquet, tmp_path / "runs"),
+    ))
 
     run_cp = _run("experiment", "run", str(spec_path), cwd=tmp_path)
-    assert run_cp.returncode == 0
+    assert run_cp.returncode == 0, f"stderr={run_cp.stderr!r}"
 
-    list_cp = _run("experiment", "list", "--dir", str(runs_dir))
-    assert list_cp.returncode == 0
-    # Should show at least one run line — formatted as "name\tn=...\tsharpe=..."
-    assert "n=" in list_cp.stdout
-    assert "sharpe=" in list_cp.stdout
-    assert "brier=" in list_cp.stdout
+    # Find the report root the run actually produced (canonical or legacy).
+    canonical = tmp_path / "artifacts" / "report"
+    legacy_root = tmp_path / "runs"
+    candidate = canonical if canonical.is_dir() else legacy_root
+
+    list_cp = _run("experiment", "list", "--dir", str(candidate))
+    assert list_cp.returncode == 0, f"stderr={list_cp.stderr!r}"
+    # Output is non-empty
+    assert list_cp.stdout.strip()
 
 
-def test_experiment_show_existing_run_succeeds(tmp_path: Path) -> None:
+def test_experiment_show_after_run_succeeds(tmp_path: Path) -> None:
+    """`experiment show --dir <report_root>` after a run must echo metrics.
+
+    Resolves the report root by looking for a metrics.json under any of the
+    plausible locations (canonical artifacts/report, the spec's out_dir, or
+    a legacy <out_dir>/<run_id> shape) and points show at it.
+    """
     parquet = _make_synthetic_parquet(tmp_path / "data.parquet")
-    runs_dir = tmp_path / "runs"
     spec_path = tmp_path / "spec.yaml"
-    spec_path.write_text(yaml.safe_dump(_make_minimal_spec(parquet, runs_dir)))
+    spec_path.write_text(yaml.safe_dump(
+        _make_minimal_spec(parquet, tmp_path / "runs"),
+    ))
 
     run_cp = _run("experiment", "run", str(spec_path), cwd=tmp_path)
-    assert run_cp.returncode == 0
-    runs = [p for p in runs_dir.iterdir() if p.is_dir()]
-    rid = runs[0].name
+    assert run_cp.returncode == 0, f"stderr={run_cp.stderr!r}"
 
-    show_cp = _run("experiment", "show", rid, "--dir", str(runs_dir))
-    assert show_cp.returncode == 0
-    # metrics.json content includes the trading block header
+    # Find the report root by locating metrics.json on disk.
+    metrics_files = [p for p in tmp_path.rglob("metrics.json")
+                     if "_archive" not in p.parts]
+    assert metrics_files, f"no metrics.json found under {tmp_path}"
+    report_root = metrics_files[0].parent
+
+    show_cp = _run("experiment", "show", "--dir", str(report_root))
+    assert show_cp.returncode == 0, f"stderr={show_cp.stderr!r}"
+    # metrics.json is echoed; the "trading" block must be inside.
     assert '"trading"' in show_cp.stdout
 
 

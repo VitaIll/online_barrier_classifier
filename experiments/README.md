@@ -11,14 +11,21 @@ wagie experiment run experiments/baseline.yaml
 python -m wagie experiment run experiments/baseline.yaml
 ```
 
-Outputs go to `artifacts/runs/<run_id>/` (gitignored): `spec.yaml`,
-`metrics.json`, `charts/`, `report.md`, `state/`.
+Output goes to the SINGLE canonical report dir `artifacts/report/`
+(gitignored): `index.html`, `manifest.json`, `spec.yaml`, `metrics.json`,
+`figs/`, `tables/`, `state/`. Each run overwrites the live tree after
+zipping the previous state into `_archive/<ts>_<hash>.zip` (last 10 kept).
+
+Side experiments (one-offs that must NOT touch the canonical report)
+go to `artifacts/experiments/<NAME>/` via `--experiment NAME`.
 
 ## Browse runs
 
 ```bash
-wagie experiment list                       # one line per run
-wagie experiment show 20260510-103040_baseline_a1b2c3d4
+wagie experiment list                       # archives + live manifest summary
+wagie experiment show                       # metrics.json + path to index.html
+wagie report rebuild --section calibration  # rerun one section without re-running the engine
+wagie report archives                       # zips under artifacts/report/_archive/
 ```
 
 ## Available specs
@@ -87,7 +94,7 @@ features:
 
 charts:   {enable: true, n_calibration_bins: 10}
 report:   {enable: true, title: "baseline experiment"}
-artifacts: {out_dir: artifacts/runs, save_state: true, save_predictions: true}
+artifacts: {save_state: true, save_predictions: true}    # default out_dir is artifacts/report
 ```
 
 ## Conventions

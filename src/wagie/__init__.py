@@ -6,7 +6,7 @@ Single-protocol experimentation lives at:
 Single batteries:
     wagie.metrics.MetricsBattery
     wagie.charts.ChartBattery
-    wagie.reporting.Report
+    wagie.reporting.ReportRenderer  (single canonical HTML report)
 
 
 Public vs internal surface
@@ -93,7 +93,7 @@ from wagie.pipeline import (
     OnlineARFCorrector,
     Pipeline,
 )
-from wagie.reporting import Report
+from wagie.reporting import ReportRenderer, RunMeta
 from wagie.risk import (
     KillSwitchPolicy,
     MaxDrawdownPolicy,
@@ -146,7 +146,7 @@ __all__ = [
     # Single batteries
     "MetricsBattery", "MetricsReport",
     "ChartBattery",
-    "Report",
+    "ReportRenderer", "RunMeta",
     # Single experiment protocol
     "ExperimentProtocol", "ExperimentSpec", "ExperimentResult",
 ]

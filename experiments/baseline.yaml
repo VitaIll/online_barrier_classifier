@@ -42,6 +42,5 @@ report:
   title: "baseline — threshold gate"
 
 artifacts:
-  out_dir: artifacts/runs
   save_state: true
   save_predictions: true

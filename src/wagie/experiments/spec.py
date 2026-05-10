@@ -37,18 +37,46 @@ class ChartsSpec(BaseModel):
 
 
 class ReportSpec(BaseModel):
+    """Toggles for the unified HTML report.
+
+    The protocol always renders into the SINGLE canonical report dir
+    (``artifacts.out_dir``, default ``artifacts/report``). When
+    ``enable=False`` no report is rendered (rare — used for smoke tests
+    where you only want metrics on disk). ``title`` overrides the default
+    page title; ``use_plotly`` toggles the interactive Plotly layer.
+    """
+
     enable: bool = True
     title: Optional[str] = None
+    use_plotly: bool = True
 
     model_config = ConfigDict(extra="forbid")
 
 
 class ArtifactsSpec(BaseModel):
-    """Where to write outputs. The protocol treats this as the only sink."""
+    """Where to write outputs.
 
-    out_dir: str = "artifacts/runs"
+    Layout (canonical, single report)::
+
+        <out_dir>/
+        ├── index.html         # the SINGLE report
+        ├── manifest.json
+        ├── figs/, tables/
+        ├── spec.yaml, metrics.json
+        ├── state/             # pipeline_state_hash + rebuild_bundle.pkl
+        └── _archive/          # last `archive_keep` snapshots (zip)
+
+    Each ``wagie experiment run`` overwrites the live tree (after
+    archiving the previous state into ``_archive/``). Side experiments
+    via ``wagie experiment run --experiment NAME`` write to
+    ``artifacts/experiments/<NAME>/`` and never archive.
+    """
+
+    out_dir: str = "artifacts/report"
     save_state: bool = True
     save_predictions: bool = True
+    archive_keep: int = 10
+    enable_archive: bool = True
 
     model_config = ConfigDict(extra="forbid")
 
@@ -87,16 +115,19 @@ class ExperimentSpec(BaseModel):
     The protocol calls:
         wagie experiment run my_spec.yaml
 
-    and produces: artifacts/runs/<run_id>/{config.yaml, metrics.json,
-    charts/, report.md, state/}.
+    and produces ``<artifacts.out_dir>/{index.html, manifest.json,
+    spec.yaml, metrics.json, figs/, tables/, state/, _archive/}`` —
+    the single canonical report. The previous run is zipped into
+    ``_archive/`` (last 10 by default) before being overwritten.
 
     Pre-registration block (round-040 additive): ``hypothesis_id``,
     ``predicted_effect_min``, ``min_n_trades``, ``min_effect_vs_seed_band``
     are evaluated by the protocol AFTER metrics compute. If any gate
-    fails, the protocol writes ``BLOCKED.md`` with the failure reasons
-    INSTEAD OF ``report.md`` and returns an ExperimentResult with
-    ``accepted=False``. ``n_trials_for_dsr`` controls the deflated
-    Sharpe ratio multiple-testing trials count.
+    fails, the protocol still renders the report but with
+    ``RunMeta.accepted=False`` and the failure reasons surfaced in the
+    report's blocked banner; ``ExperimentResult.accepted`` is False.
+    ``n_trials_for_dsr`` controls the deflated Sharpe ratio
+    multiple-testing trials count.
     """
 
     name: str

@@ -68,31 +68,44 @@ Expected output (synthetic data; numbers are illustrative):
 
 ```
 brier=0.06xxx  ece=0.0xxx  n_trades=NN  sharpe=±x.xxx
-out_dir: artifacts/runs/<timestamp>_baseline_<hash>/
-report:  artifacts/runs/.../report.md
+out_dir: artifacts/report
+report:  artifacts/report/index.html
 ```
 
-The run writes everything to `artifacts/runs/<run_id>/`:
+There is ONE canonical report on disk; every `wagie experiment run` overwrites
+it. The previous render is zipped into `_archive/` first; only the last 10
+archived snapshots are kept.
 
 ```
-artifacts/runs/20260510-103040_baseline_a1b2c3d4/
-├── spec.yaml          # snapshot of the spec used
-├── metrics.json       # MetricsBattery output (calibration leads)
-├── charts/            # ChartBattery output (PNGs incl. reliability_diagram.png)
-├── report.md          # Report renderer output
-└── state/             # pipeline state hash
+artifacts/report/
+├── index.html          # the single unified report (open in a browser)
+├── manifest.json       # what each section contributed
+├── metrics.json        # MetricsBattery output (calibration leads)
+├── spec.yaml           # snapshot of the spec used
+├── figs/<section>/     # PNG fallbacks (when Plotly is disabled / unavailable)
+├── tables/<section>.json
+├── state/
+│   ├── pipeline_state_hash.txt
+│   └── rebuild_bundle.pkl    # fuel for `wagie report rebuild --section X`
+└── _archive/<ts>_<hash>.zip  # last 10 prior renders
 ```
 
 `metrics.json` always includes `brier`, `ece`, and a `trading` block (`n_trades`, `sharpe`, `max_drawdown`). Older runs that show `brier=0, ece=0` are pre-fix relics — every new run produces non-zero values whenever the labelled stream advances past warmup.
 
+Side experiments use `--experiment NAME` and write to
+`artifacts/experiments/<NAME>/` without touching the canonical report.
+
 ## CLI
 
 ```bash
-wagie experiment run <spec.yaml>     # run a single experiment
-wagie experiment list                # one line per run in artifacts/runs/
-wagie experiment show <run_id>       # echo metrics + report path
-wagie cv <spec.yaml>                 # cross-validation (overrides cv block)
-wagie info                           # version + public surface
+wagie experiment run <spec.yaml>             # overwrite artifacts/report/
+wagie experiment run <spec.yaml> --experiment foo   # side experiment, isolated
+wagie experiment list                        # live manifest + archive list
+wagie experiment show                        # echo metrics + report path
+wagie report rebuild --section calibration   # re-render one section, no engine re-run
+wagie report archives                        # list archived snapshots
+wagie cv <spec.yaml>                         # cross-validation (overrides cv block)
+wagie info                                   # version + public surface
 ```
 
 ## Make

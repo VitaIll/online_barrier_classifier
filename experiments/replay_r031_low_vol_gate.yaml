@@ -62,6 +62,5 @@ report:
   title: "R-031 replay — low-vol gated ThresholdGate (regime-gated)"
 
 artifacts:
-  out_dir: artifacts/runs
   save_state: true
   save_predictions: true

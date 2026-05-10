@@ -39,6 +39,8 @@ dependencies = [
 
     # Charts / report
     "matplotlib>=3.7,<4.0",
+    "plotly>=5.18,<6.0",
+    "jinja2>=3.1,<4.0",
 
     # Tracking (optional in code paths)
     "mlflow>=2.10,<3.0",

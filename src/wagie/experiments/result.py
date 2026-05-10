@@ -17,15 +17,26 @@ class ExperimentResult:
     Accept-gate fields (round-040 additive):
       - ``accepted`` is False when the protocol's ``_check_accept_gates``
         rejected the run (sample-size, predicted-effect-floor, or seed-band
-        gates). ``blocked_reasons`` lists the failed gates.
-      - ``blocked_path`` points to ``BLOCKED.md`` when gates fail (set by
-        the protocol). ``report_path`` is None in that case.
+        gates). ``blocked_reasons`` lists the failed gates. The renderer
+        surfaces this as a ``BLOCKED`` banner in the HTML report.
+      - ``blocked_path`` is retained for backwards compatibility; with the
+        unified HTML report there is no separate ``BLOCKED.md`` (the banner
+        IS the block notice), so this is always None for new runs.
+
+    Layout note (post-unified-report):
+      - ``out_dir`` is the canonical report root itself (e.g.
+        ``artifacts/report/``), NOT a per-run timestamped subdir.
+      - ``report_path`` is ``out_dir / "index.html"``.
+      - ``chart_paths`` is empty — chart paths are owned by the renderer's
+        manifest now (read via ``manifest.json``).
+      - In CV mode ``engine_result`` is None (CV doesn't produce a single
+        EngineResult).
     """
 
     run_id: str
     out_dir: Path
     spec_path: Path
-    engine_result: EngineResult
+    engine_result: Optional[EngineResult]
     metrics: dict
     chart_paths: dict[str, Path] = field(default_factory=dict)
     report_path: Optional[Path] = None

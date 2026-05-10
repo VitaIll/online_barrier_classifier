@@ -72,7 +72,7 @@ This page enumerates exactly what's missing and exactly what would unblock paper
 
 ### 7. State checkpointing
 
-- **What exists**: `artifacts/runs/<run_id>/state/` (per-run pipeline state hash).
+- **What exists**: `artifacts/report/state/` (canonical pipeline state hash; archived snapshots in `artifacts/report/_archive/<ts>_<hash>.zip`, last 10 retained).
 - **Missing**:
   - **Continuous** checkpointing during a live session (not only at run end).
   - Atomic write + rename so a crash mid-checkpoint doesn't corrupt state.

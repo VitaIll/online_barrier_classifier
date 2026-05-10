@@ -11,31 +11,32 @@ Or via CLI:
     wagie experiment run experiments/baseline.yaml
 
 Stages (one tick — backtest):
-    1. Resolve out_dir, write spec snapshot
-    2. Build pipeline + engine via wagie.run.run()
-    3. Run engine event loop → EngineResult
-    4. MetricsBattery.compute → MetricsReport
-    5. ChartBattery.render_all → png paths
-    6. Report.render → report.md
-    7. Persist metrics.json + state hash
+    1. Build pipeline + engine via wagie.run.run()
+    2. Run engine event loop → EngineResult
+    3. MetricsBattery.compute → MetricsReport
+    4. Evaluate accept-gates → RunMeta(accepted=, blocked_reasons=)
+    5. ReportRenderer.render → the SINGLE canonical report on disk
 
 When ``spec.cv`` is set, the protocol delegates to ``wagie.cv.cross_validation``
-and aggregates per-fold metrics into the same MetricsReport / Report shape.
+and feeds the per-fold result + aggregated metrics dict into the renderer.
+
+Side-experiment escape hatch: pass ``experiment_name="..."`` to
+``ExperimentProtocol.run`` (or ``--experiment NAME`` to the CLI) and the
+output is redirected to ``artifacts/experiments/<name>/`` with archiving
+disabled (it's a one-off, no rotation).
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from wagie.charts import ChartBattery
 from wagie.engine import EngineResult
 from wagie.metrics import MetricsBattery
-from wagie.reporting import Report
+from wagie.reporting import ReportRenderer, RunMeta
 from wagie.run import run as run_backtest
 
 from .result import ExperimentResult
@@ -59,8 +60,8 @@ def _check_accept_gates(metrics: dict, spec: ExperimentSpec) -> list[str]:
 
     Returns a list of human-readable failure reasons. Empty list = PASS.
     Gates evaluated:
-      1. Sample size: ``trading.n_trades`` ≥ ``spec.min_n_trades``.
-      2. Predicted-effect floor: ``trading.sharpe`` ≥
+      1. Sample size: ``trading.n_trades`` >= ``spec.min_n_trades``.
+      2. Predicted-effect floor: ``trading.sharpe`` >=
          ``spec.predicted_effect_min`` (when set). For backtest mode
          additionally requires the lower CI bound to clear zero when a
          CI was computed.
@@ -108,66 +109,21 @@ def _check_accept_gates(metrics: dict, spec: ExperimentSpec) -> list[str]:
     return reasons
 
 
-def _write_blocked_md(
-    out_dir: Path, *, run_id: str, spec: ExperimentSpec,
-    reasons: list[str], metrics: dict,
-) -> Path:
-    """Write ``BLOCKED.md`` instead of ``report.md`` when gates fail."""
-    trading = metrics.get("trading") or {}
-    body = [
-        f"# BLOCKED — accept-gate failure",
-        "",
-        f"- run_id: `{run_id}`",
-        f"- hypothesis_id: `{spec.hypothesis_id}`",
-        f"- spec hash: `{spec.hash()}`",
-        f"- spec name: `{spec.name}`",
-        "",
-        "## Pre-registration",
-        f"- predicted_effect_min: `{spec.predicted_effect_min}`",
-        f"- min_n_trades: `{spec.min_n_trades}`",
-        f"- min_effect_vs_seed_band: `{spec.min_effect_vs_seed_band}`",
-        f"- n_trials_for_dsr: `{spec.n_trials_for_dsr}`",
-        "",
-        "## Observed",
-        f"- n_trades: `{trading.get('n_trades', 0)}`",
-        f"- sharpe (point): `"
-        f"{format(trading['sharpe'], '+.4f') if isinstance(trading.get('sharpe'), (int, float)) else 'n/a'}`",
-        f"- sharpe_ci: `{metrics.get('sharpe_ci')}`",
-        f"- brier: `{metrics.get('brier')}`",
-        f"- ece: `{metrics.get('ece')}`",
-        "",
-        "## Failed gates",
-    ]
-    for r in reasons:
-        body.append(f"- {r}")
-    body.append("")
-    body.append("This run did NOT produce `report.md`. Re-run with adjusted "
-                "spec (or accept this rejection) before proceeding.")
-    body.append("")
-    p = out_dir / "BLOCKED.md"
-    p.write_text("\n".join(body), encoding="utf-8")
-    return p
-
-
 @dataclass
 class ExperimentProtocol:
     """The ONE protocol. All experiments flow through here.
 
-    ``metrics_battery``, ``chart_battery``, ``report`` are injectable for
-    tests and bespoke users; defaults are the canonical shipped batteries.
+    ``metrics_battery`` is injectable for tests and bespoke users; the
+    default is the canonical shipped battery. Reporting is owned by
+    :class:`wagie.reporting.ReportRenderer`; the protocol composes the
+    inputs but does not own any HTML/markdown writers itself.
     """
 
     metrics_battery: MetricsBattery = None
-    chart_battery: ChartBattery = None
-    report: Report = None
 
     def __post_init__(self):
         if self.metrics_battery is None:
             self.metrics_battery = MetricsBattery()
-        if self.chart_battery is None:
-            self.chart_battery = ChartBattery()
-        if self.report is None:
-            self.report = Report()
 
     # -----------------------------------------------------------------
     # Public entry point — dispatches on spec
@@ -178,7 +134,33 @@ class ExperimentProtocol:
         spec: ExperimentSpec,
         *,
         spec_path: Optional[Path] = None,
+        experiment_name: Optional[str] = None,
     ) -> ExperimentResult:
+        """Run the experiment described by ``spec``.
+
+        Parameters
+        ----------
+        spec
+            Validated spec.
+        spec_path
+            Original YAML path (echoed back on the result).
+        experiment_name
+            When set, redirect output to
+            ``artifacts/experiments/<experiment_name>/`` and disable
+            archiving for this render. Used by the CLI's
+            ``--experiment NAME`` flag for one-off side runs that must
+            not touch the canonical report.
+        """
+        # Side-experiment escape hatch — clone of the spec with the
+        # artifacts dir overridden so we never touch the canonical report.
+        if experiment_name:
+            new_spec = spec.model_copy(deep=True)
+            new_spec.artifacts.out_dir = str(
+                Path("artifacts/experiments") / experiment_name
+            )
+            new_spec.artifacts.enable_archive = False
+            spec = new_spec
+
         if spec.cv is not None and spec.cv.enabled:
             return self._run_cv(spec, spec_path=spec_path)
         return self._run_backtest(spec, spec_path=spec_path)
@@ -194,10 +176,10 @@ class ExperimentProtocol:
         spec_path: Optional[Path] = None,
     ) -> ExperimentResult:
         run_id = _make_run_id(spec)
-        out_dir = Path(spec.artifacts.out_dir) / run_id
-        out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "spec.yaml").write_text(spec.to_yaml(), encoding="utf-8")
-        logger.info(f"experiment[backtest] run_id={run_id} out_dir={out_dir}")
+        report_root = Path(spec.artifacts.out_dir)
+        logger.info(
+            f"experiment[backtest] run_id={run_id} report_root={report_root}"
+        )
 
         feature_builder, base_bar, regime = _build_features(spec)
         self.metrics_battery.m_minutes = spec.wagie.data.m_minutes
@@ -212,62 +194,54 @@ class ExperimentProtocol:
 
         metrics_report = self.metrics_battery.compute(engine_result)
         metrics_dict = metrics_report.to_dict()
-        (out_dir / "metrics.json").write_text(metrics_report.to_json(), encoding="utf-8")
 
-        chart_paths: dict[str, Path] = {}
-        if spec.charts.enable:
-            self.chart_battery.n_calibration_bins = spec.charts.n_calibration_bins
-            chart_paths = self.chart_battery.render_all(
-                engine_result, out_dir / "charts",
-            )
-
-        # Accept-gate (round-040 additive): BEFORE writing report.md, evaluate
-        # pre-registration gates. If any fail, write BLOCKED.md and refuse to
-        # publish a report.
+        # Accept-gate: evaluate pre-registration gates BEFORE rendering so
+        # the renderer can surface BLOCKED status in the banner.
         blocked_reasons = _check_accept_gates(metrics_dict, spec)
         accepted = not blocked_reasons
-        report_path: Optional[Path] = None
-        blocked_path: Optional[Path] = None
         if not accepted:
-            blocked_path = _write_blocked_md(
-                out_dir, run_id=run_id, spec=spec,
-                reasons=blocked_reasons, metrics=metrics_dict,
-            )
             metrics_dict["accepted"] = False
             metrics_dict["blocked_reasons"] = list(blocked_reasons)
-            (out_dir / "metrics.json").write_text(
-                json.dumps(metrics_dict, indent=2, default=str),
-                encoding="utf-8",
-            )
             logger.warning(
                 f"experiment[backtest] BLOCKED run_id={run_id} "
                 f"reasons={blocked_reasons}"
             )
-        elif spec.report.enable:
-            self.report.title = spec.report.title or f"experiment: {spec.name}"
-            report_path = self.report.render(
-                spec_dict=spec.model_dump(mode="json"),
-                metrics=metrics_dict,
-                chart_paths=chart_paths,
-                out_path=out_dir / "report.md",
-                run_id=run_id,
-            )
 
-        if spec.artifacts.save_state:
-            state_dir = out_dir / "state"
-            state_dir.mkdir(exist_ok=True)
-            (state_dir / "pipeline_state_hash.txt").write_text(
-                engine_result.pipeline_state_hash.hex(), encoding="utf-8",
+        report_path: Optional[Path] = None
+        if spec.report.enable:
+            run_meta = RunMeta(
+                run_id=run_id,
+                spec_name=spec.name,
+                spec_hash=spec.hash(),
+                mode="backtest",
+                accepted=accepted,
+                blocked_reasons=list(blocked_reasons),
+                state_hash=engine_result.pipeline_state_hash.hex()
+                if engine_result.pipeline_state_hash else "",
+                use_plotly=bool(spec.report.use_plotly),
+            )
+            renderer = ReportRenderer(
+                report_root=report_root,
+                archive_keep=int(spec.artifacts.archive_keep),
+                enable_archive=bool(spec.artifacts.enable_archive),
+            )
+            report_path = renderer.render(
+                engine_result=engine_result,
+                metrics=metrics_dict,
+                spec_dict=spec.model_dump(mode="json"),
+                run_meta=run_meta,
+                use_plotly=bool(spec.report.use_plotly),
+                title=spec.report.title,
             )
 
         result = ExperimentResult(
-            run_id=run_id, out_dir=out_dir,
-            spec_path=Path(spec_path) if spec_path else out_dir / "spec.yaml",
+            run_id=run_id, out_dir=report_root,
+            spec_path=Path(spec_path) if spec_path else report_root / "spec.yaml",
             engine_result=engine_result, metrics=metrics_dict,
-            chart_paths=chart_paths, report_path=report_path,
+            chart_paths={}, report_path=report_path,
             spec_hash=spec.hash(),
             accepted=accepted, blocked_reasons=blocked_reasons,
-            blocked_path=blocked_path,
+            blocked_path=None,
         )
         logger.info(result.headline)
         return result
@@ -285,10 +259,8 @@ class ExperimentProtocol:
         from wagie.cv import cross_validation
 
         run_id = _make_run_id(spec)
-        out_dir = Path(spec.artifacts.out_dir) / run_id
-        out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / "spec.yaml").write_text(spec.to_yaml(), encoding="utf-8")
-        logger.info(f"experiment[cv] run_id={run_id} out_dir={out_dir}")
+        report_root = Path(spec.artifacts.out_dir)
+        logger.info(f"experiment[cv] run_id={run_id} report_root={report_root}")
 
         cv = spec.cv
         cv_result = cross_validation(
@@ -299,93 +271,59 @@ class ExperimentProtocol:
             embargo_size=cv.embargo_size,
         )
 
-        metrics_dict = _cv_to_metrics_dict(cv_result, m_minutes=spec.wagie.data.m_minutes)
-        (out_dir / "metrics.json").write_text(
-            json.dumps(metrics_dict, indent=2, default=str), encoding="utf-8",
+        metrics_dict = _cv_to_metrics_dict(
+            cv_result, m_minutes=spec.wagie.data.m_minutes,
         )
-
-        # Charts: CV gets its own minimal panel (per-fold sharpe bars + PBO marker)
-        chart_paths: dict[str, Path] = {}
-        if spec.charts.enable:
-            chart_paths = self._render_cv_charts(cv_result, out_dir / "charts")
 
         # Accept-gate (round-040 additive) — same semantics as backtest mode.
         blocked_reasons = _check_accept_gates(metrics_dict, spec)
         accepted = not blocked_reasons
-        report_path: Optional[Path] = None
-        blocked_path: Optional[Path] = None
         if not accepted:
-            blocked_path = _write_blocked_md(
-                out_dir, run_id=run_id, spec=spec,
-                reasons=blocked_reasons, metrics=metrics_dict,
-            )
             metrics_dict["accepted"] = False
             metrics_dict["blocked_reasons"] = list(blocked_reasons)
-            (out_dir / "metrics.json").write_text(
-                json.dumps(metrics_dict, indent=2, default=str),
-                encoding="utf-8",
-            )
             logger.warning(
                 f"experiment[cv] BLOCKED run_id={run_id} "
                 f"reasons={blocked_reasons}"
             )
-        elif spec.report.enable:
-            self.report.title = spec.report.title or f"cv: {spec.name}"
-            report_path = self.report.render(
+
+        report_path: Optional[Path] = None
+        if spec.report.enable:
+            run_meta = RunMeta(
+                run_id=run_id,
+                spec_name=spec.name,
+                spec_hash=spec.hash(),
+                mode="cv",
+                accepted=accepted,
+                blocked_reasons=list(blocked_reasons),
+                state_hash="",
+                use_plotly=bool(spec.report.use_plotly),
+            )
+            renderer = ReportRenderer(
+                report_root=report_root,
+                archive_keep=int(spec.artifacts.archive_keep),
+                enable_archive=bool(spec.artifacts.enable_archive),
+            )
+            # CV mode passes ``cv_result`` directly to the renderer; the
+            # section emitters know how to read it. No EngineResult stub.
+            report_path = renderer.render(
+                engine_result=None,
+                metrics=metrics_dict,
                 spec_dict=spec.model_dump(mode="json"),
-                metrics=metrics_dict, chart_paths=chart_paths,
-                out_path=out_dir / "report.md", run_id=run_id,
+                run_meta=run_meta,
+                cv_result=cv_result,
+                use_plotly=bool(spec.report.use_plotly),
+                title=spec.report.title,
             )
 
-        # CV doesn't have a single EngineResult; build a stub so ExperimentResult
-        # remains uniform.
-        from wagie.engine import EngineResult as _ER
-        from wagie.io.brokers import BrokerLedger
-        from wagie.core.portfolio import Portfolio
-        stub_engine = _ER(
-            ledger=BrokerLedger(fills=[], n_open_at_finalize=0, config={}),
-            n_decisions=int(sum(r.get("n_trades", 0) for r in cv_result.per_fold)),
-            n_filled=0, n_skipped_warmup=0,
-            n_actions_approved=0, n_actions_rejected=0,
-            pipeline_state_hash=b"\x00" * 32,
-            final_portfolio=Portfolio(),
-        )
         return ExperimentResult(
-            run_id=run_id, out_dir=out_dir,
-            spec_path=Path(spec_path) if spec_path else out_dir / "spec.yaml",
-            engine_result=stub_engine, metrics=metrics_dict,
-            chart_paths=chart_paths, report_path=report_path,
+            run_id=run_id, out_dir=report_root,
+            spec_path=Path(spec_path) if spec_path else report_root / "spec.yaml",
+            engine_result=None, metrics=metrics_dict,
+            chart_paths={}, report_path=report_path,
             spec_hash=spec.hash(),
             accepted=accepted, blocked_reasons=blocked_reasons,
-            blocked_path=blocked_path,
+            blocked_path=None,
         )
-
-    def _render_cv_charts(self, cv_result, out_dir: Path) -> dict[str, Path]:
-        import matplotlib.pyplot as plt
-        from wagie.charts.theme import PALETTE, apply_theme, figsize
-
-        out_dir = Path(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out: dict[str, Path] = {}
-
-        # Per-fold Sharpe bar chart
-        apply_theme(plt)
-        fig, ax = plt.subplots(figsize=figsize("wide"))
-        if cv_result.per_fold:
-            xs = [r["fold"] for r in cv_result.per_fold]
-            sharpes = [r.get("sharpe", 0.0) for r in cv_result.per_fold]
-            ax.bar(xs, sharpes, color=PALETTE["primary"], alpha=0.85)
-            ax.axhline(0, color=PALETTE["muted"], linewidth=0.6)
-            ax.set_xlabel("fold")
-            ax.set_ylabel("Sharpe (annualized)")
-            ax.set_title(f"per-fold Sharpe (PBO={cv_result.pbo:.2f})")
-        else:
-            ax.text(0.5, 0.5, "no folds", ha="center", va="center")
-        path = out_dir / "01_per_fold_sharpe.png"
-        fig.savefig(path)
-        plt.close(fig)
-        out["per_fold_sharpe"] = path
-        return out
 
 
 def _cv_to_metrics_dict(cv_result, *, m_minutes: int) -> dict:

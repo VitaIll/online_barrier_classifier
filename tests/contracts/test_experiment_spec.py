@@ -199,9 +199,11 @@ def test_training_spec_defaults() -> None:
 
 def test_artifacts_spec_defaults() -> None:
     a = ArtifactsSpec()
-    assert a.out_dir == "artifacts/runs"
+    assert a.out_dir == "artifacts/report"
     assert a.save_state is True
     assert a.save_predictions is True
+    assert a.archive_keep == 10
+    assert a.enable_archive is True
 
 
 def test_charts_spec_defaults() -> None:
@@ -214,6 +216,7 @@ def test_report_spec_defaults() -> None:
     r = ReportSpec()
     assert r.enable is True
     assert r.title is None
+    assert r.use_plotly is True
 
 
 def test_features_spec_defaults() -> None:

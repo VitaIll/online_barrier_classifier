@@ -33,7 +33,7 @@ features:
   regime_labels: [low, med, high]
 charts: {enable: true, n_calibration_bins: 10}
 report: {enable: true, title: "sweep_alpha — tau=0.10"}
-artifacts: {out_dir: artifacts/runs, save_state: true, save_predictions: true}
+artifacts: {save_state: true, save_predictions: true}
 
 ---
 
@@ -56,7 +56,7 @@ features:
   regime_labels: [low, med, high]
 charts: {enable: true, n_calibration_bins: 10}
 report: {enable: true, title: "sweep_alpha — tau=0.30"}
-artifacts: {out_dir: artifacts/runs, save_state: true, save_predictions: true}
+artifacts: {save_state: true, save_predictions: true}
 
 ---
 
@@ -79,7 +79,7 @@ features:
   regime_labels: [low, med, high]
 charts: {enable: true, n_calibration_bins: 10}
 report: {enable: true, title: "sweep_alpha — tau=0.50"}
-artifacts: {out_dir: artifacts/runs, save_state: true, save_predictions: true}
+artifacts: {save_state: true, save_predictions: true}
 
 ---
 
@@ -102,7 +102,7 @@ features:
   regime_labels: [low, med, high]
 charts: {enable: true, n_calibration_bins: 10}
 report: {enable: true, title: "sweep_alpha — tau=0.70"}
-artifacts: {out_dir: artifacts/runs, save_state: true, save_predictions: true}
+artifacts: {save_state: true, save_predictions: true}
 
 ---
 
@@ -125,4 +125,4 @@ features:
   regime_labels: [low, med, high]
 charts: {enable: true, n_calibration_bins: 10}
 report: {enable: true, title: "sweep_alpha — tau=0.90"}
-artifacts: {out_dir: artifacts/runs, save_state: true, save_predictions: true}
+artifacts: {save_state: true, save_predictions: true}

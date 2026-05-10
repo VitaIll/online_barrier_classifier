@@ -37,7 +37,7 @@ jupyter lab notebooks/
 Or run cell-by-cell in VS Code's notebook UI.
 
 **Caveats**:
-- Outputs from notebooks do NOT appear in `artifacts/runs/`; only `wagie experiment run`
+- Outputs from notebooks do NOT appear in `artifacts/report/`; only `wagie experiment run`
   writes to the canonical artifact tree. A notebook run leaves nothing the
   loop discipline (per-round audit, accept gates, reproducibility hash) can
   ingest.

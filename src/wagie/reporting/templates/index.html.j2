@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title|e }}</title>
+<style>
+:root{
+  --bg:#fafafa; --panel:#ffffff; --ink:#1a1a1a; --muted:#666; --line:#e6e6e6;
+  --accent:#1f77b4; --good:#2ca02c; --bad:#d62728; --warn:#ff7f0e;
+  --code:#f5f5f5;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  font-size:15px;line-height:1.5}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code{background:var(--code);padding:1px 5px;border-radius:3px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.9em}
+pre{background:var(--code);padding:12px;border-radius:6px;overflow:auto;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:0.85em;
+  border:1px solid var(--line)}
+table{border-collapse:collapse;width:100%;margin:8px 0;font-size:0.92em}
+th,td{padding:6px 10px;border-bottom:1px solid var(--line);text-align:left}
+th{font-weight:600;background:#fafafa}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+hr{border:0;border-top:1px solid var(--line);margin:18px 0}
+
+/* Layout: sidebar TOC + main content */
+.layout{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
+.toc{position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;
+  padding:18px 16px;background:var(--panel);border-right:1px solid var(--line)}
+.toc h3{margin:0 0 8px 0;font-size:0.78em;letter-spacing:0.06em;
+  text-transform:uppercase;color:var(--muted)}
+.toc ul{list-style:none;padding:0;margin:0 0 18px 0}
+.toc li{margin:0}
+.toc a{display:block;padding:6px 8px;border-radius:4px;color:var(--ink);
+  font-size:0.93em}
+.toc a:hover{background:#f0f4f8;text-decoration:none}
+.toc .meta{font-size:0.78em;color:var(--muted);margin-top:8px}
+
+main{padding:20px 28px;max-width:1080px}
+header.report-head{margin-bottom:18px}
+header.report-head h1{margin:0 0 4px 0;font-size:1.55em}
+header.report-head .sub{color:var(--muted);font-size:0.92em}
+
+.banner{padding:10px 14px;border-radius:6px;margin:10px 0 16px 0;
+  font-size:0.93em;border:1px solid transparent}
+.banner.ok{background:#eaf6ec;border-color:#bfe2c4;color:#1d6a2a}
+.banner.blocked{background:#fbeaea;border-color:#f1bdbd;color:#7a1f1f}
+.banner ul{margin:6px 0 0 18px;padding:0}
+
+section.report-section{margin-top:8px;padding:18px 0;border-top:1px solid var(--line)}
+section.report-section:first-of-type{border-top:0;padding-top:0}
+section.report-section > h2{margin:0 0 12px 0;font-size:1.2em}
+
+/* KPI cards row */
+.kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+  gap:10px;margin:8px 0 14px 0}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:6px;
+  padding:10px 12px}
+.kpi .k{color:var(--muted);font-size:0.78em;letter-spacing:0.04em;
+  text-transform:uppercase}
+.kpi .v{font-size:1.35em;font-weight:600;font-variant-numeric:tabular-nums;
+  margin-top:2px}
+.kpi .ci{font-size:0.78em;color:var(--muted)}
+.kpi.good .v{color:var(--good)}
+.kpi.bad .v{color:var(--bad)}
+
+figure{margin:14px 0;padding:0}
+figure img{max-width:100%;height:auto;border:1px solid var(--line);
+  border-radius:4px;background:#fff}
+figure figcaption{font-size:0.86em;color:var(--muted);margin-top:4px}
+
+.empty{padding:8px 12px;color:var(--muted);font-style:italic}
+
+details{border:1px solid var(--line);border-radius:6px;padding:0 12px;
+  background:var(--panel);margin:10px 0}
+details > summary{padding:8px 0;cursor:pointer;font-weight:600}
+details[open] > summary{border-bottom:1px solid var(--line);margin-bottom:8px}
+
+/* Tabset (pure CSS): use shared `name` attr on details */
+.tabset{display:block;margin:10px 0}
+.tabset details{border:0;background:transparent;padding:0;margin:0}
+.tabset details > summary{display:inline-block;padding:6px 12px;border-radius:4px 4px 0 0;
+  background:#eee;border:1px solid var(--line);border-bottom:none;margin-right:2px;
+  font-weight:500;font-size:0.92em}
+.tabset details[open] > summary{background:var(--panel);position:relative;z-index:1}
+.tabset details > .tab-body{border:1px solid var(--line);background:var(--panel);
+  padding:14px;border-radius:0 6px 6px 6px;margin-top:-1px}
+
+/* Plotly figures */
+.plotly-fig{margin:14px 0;background:#fff;border:1px solid var(--line);
+  border-radius:4px;padding:6px}
+.plotly-warn{font-size:0.85em;color:var(--warn);padding:4px 0}
+
+/* Headline colors for accept-state */
+.gate-ok{color:var(--good);font-weight:600}
+.gate-blocked{color:var(--bad);font-weight:600}
+
+/* Smaller-screen */
+@media (max-width:840px){
+  .layout{grid-template-columns:1fr}
+  .toc{position:relative;height:auto;border-right:0;border-bottom:1px solid var(--line)}
+}
+</style>
+{% if include_plotly %}
+<script src="https://cdn.plot.ly/plotly-2.32.0.min.js" charset="utf-8"></script>
+<script>
+window.addEventListener('load',function(){
+  if(typeof Plotly==='undefined'){
+    var divs=document.querySelectorAll('.plotly-fig');
+    divs.forEach(function(d){
+      var w=document.createElement('div');w.className='plotly-warn';
+      w.textContent='Plotly failed to load (offline?). PNG fallback shown if available.';
+      d.parentNode.insertBefore(w,d);
+    });
+  }
+});
+</script>
+{% endif %}
+</head>
+<body>
+<div class="layout">
+  <nav class="toc" aria-label="Table of contents">
+    <h3>{{ title|e }}</h3>
+    <ul>
+      {% for section in sections %}
+      <li><a href="#{{ section.name }}">{{ section.title|e }}</a></li>
+      {% endfor %}
+    </ul>
+    <hr>
+    <h3>Run</h3>
+    <div class="meta">
+      <div><strong>id</strong> <code>{{ run_meta.run_id|e }}</code></div>
+      <div><strong>spec</strong> <code>{{ run_meta.spec_name|e }}</code></div>
+      <div><strong>hash</strong> <code>{{ run_meta.spec_hash|e }}</code></div>
+      <div><strong>mode</strong> {{ run_meta.mode|e }}</div>
+      {% if run_meta.state_hash %}
+      <div><strong>state</strong> <code>{{ run_meta.state_hash[:16]|e }}</code></div>
+      {% endif %}
+      {% if run_meta.git_sha %}
+      <div><strong>git</strong> <code>{{ run_meta.git_sha[:8]|e }}</code></div>
+      {% endif %}
+      <div style="margin-top:6px">
+        {% if run_meta.accepted %}
+        <span class="gate-ok">ACCEPTED</span>
+        {% else %}
+        <span class="gate-blocked">BLOCKED</span>
+        {% endif %}
+      </div>
+      <div style="margin-top:8px">generated {{ generated_at_utc|e }}</div>
+    </div>
+  </nav>
+
+  <main>
+    <header class="report-head">
+      <h1>{{ title|e }}</h1>
+      <div class="sub">
+        run <code>{{ run_meta.run_id|e }}</code>
+        &middot; spec <code>{{ run_meta.spec_name|e }}</code>
+        &middot; mode <code>{{ run_meta.mode|e }}</code>
+        &middot; generated <code>{{ generated_at_utc|e }}</code>
+      </div>
+    </header>
+
+    {% if not run_meta.accepted %}
+    <div class="banner blocked" role="alert">
+      <strong>BLOCKED</strong> — accept-gate failed. Pre-registered thresholds
+      were not met. The run did not produce a ratified report; the artifacts
+      below are recorded for diagnosis only.
+      {% if run_meta.blocked_reasons %}
+      <ul>
+        {% for r in run_meta.blocked_reasons %}<li>{{ r|e }}</li>{% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="banner ok" role="status">
+      <strong>ACCEPTED</strong> — pre-registration gates passed.
+    </div>
+    {% endif %}
+
+    {% for section in sections %}
+    <section id="{{ section.name }}" class="report-section">
+      <h2>{{ section.title|e }}</h2>
+      {{ section.html_fragment|safe }}
+    </section>
+    {% endfor %}
+
+    <footer style="color:var(--muted);font-size:0.82em;margin-top:36px;
+                   padding-top:14px;border-top:1px solid var(--line)">
+      Generated by <code>wagie.reporting.ReportRenderer</code>
+      &middot; manifest schema v{{ schema_version }}
+      &middot; <a href="manifest.json">manifest.json</a>
+    </footer>
+  </main>
+</div>
+</body>
+</html>

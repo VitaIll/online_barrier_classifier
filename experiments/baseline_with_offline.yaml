@@ -63,6 +63,5 @@ report:
   title: "baseline + offline — two-layer ThresholdGate(p_online)"
 
 artifacts:
-  out_dir: artifacts/runs
   save_state: true
   save_predictions: true
