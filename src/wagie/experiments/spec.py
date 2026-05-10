@@ -88,6 +88,14 @@ class ExperimentSpec(BaseModel):
 
     and produces: artifacts/runs/<run_id>/{config.yaml, metrics.json,
     charts/, report.md, state/}.
+
+    Pre-registration block (round-040 additive): ``hypothesis_id``,
+    ``predicted_effect_min``, ``min_n_trades``, ``min_effect_vs_seed_band``
+    are evaluated by the protocol AFTER metrics compute. If any gate
+    fails, the protocol writes ``BLOCKED.md`` with the failure reasons
+    INSTEAD OF ``report.md`` and returns an ExperimentResult with
+    ``accepted=False``. ``n_trials_for_dsr`` controls the deflated
+    Sharpe ratio multiple-testing trials count.
     """
 
     name: str
@@ -103,6 +111,13 @@ class ExperimentSpec(BaseModel):
     charts: ChartsSpec = Field(default_factory=ChartsSpec)
     report: ReportSpec = Field(default_factory=ReportSpec)
     artifacts: ArtifactsSpec = Field(default_factory=ArtifactsSpec)
+
+    # ---------------- Pre-registration / accept-gate (round-040) ----------
+    hypothesis_id: str = "unspecified"
+    predicted_effect_min: Optional[float] = None
+    min_n_trades: int = 0
+    min_effect_vs_seed_band: float = 0.0
+    n_trials_for_dsr: int = 1
 
     model_config = ConfigDict(extra="forbid")
 

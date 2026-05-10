@@ -54,8 +54,16 @@ class Report:
         # === 1. Calibration (lead) ===
         lines.append("## 1. Calibration")
         lines.append("")
-        lines.append(f"- **Brier**: `{metrics.get('brier', 0.0):.5f}`")
-        lines.append(f"- **ECE**: `{metrics.get('ece', 0.0):.5f}`")
+        brier_val = metrics.get('brier')
+        ece_val = metrics.get('ece')
+        if isinstance(brier_val, (int, float)):
+            lines.append(f"- **Brier**: `{brier_val:.5f}`")
+        else:
+            lines.append("- **Brier**: `n/a` (mode does not capture per-decision predictions)")
+        if isinstance(ece_val, (int, float)):
+            lines.append(f"- **ECE**: `{ece_val:.5f}`")
+        else:
+            lines.append("- **ECE**: `n/a` (mode does not capture per-decision predictions)")
         if "reliability" in chart_paths:
             lines.append("")
             lines.append(self._image("Reliability diagram", chart_paths["reliability"], out_path))
@@ -122,8 +130,16 @@ class Report:
         lines.append(f"- **actions approved / rejected**: "
                      f"`{metrics.get('n_actions_approved', 0)}` / "
                      f"`{metrics.get('n_actions_rejected', 0)}`")
-        lines.append(f"- **ROC-AUC** (diagnostic): `{metrics.get('roc_auc', 0.5):.3f}`")
-        lines.append(f"- **PR-AUC** (diagnostic): `{metrics.get('pr_auc', 0.0):.3f}`")
+        roc_val = metrics.get('roc_auc')
+        pr_val = metrics.get('pr_auc')
+        if isinstance(roc_val, (int, float)):
+            lines.append(f"- **ROC-AUC** (diagnostic): `{roc_val:.3f}`")
+        else:
+            lines.append("- **ROC-AUC** (diagnostic): `n/a`")
+        if isinstance(pr_val, (int, float)):
+            lines.append(f"- **PR-AUC** (diagnostic): `{pr_val:.3f}`")
+        else:
+            lines.append("- **PR-AUC** (diagnostic): `n/a`")
         lines.append("")
 
         # === 5. Spec ===
