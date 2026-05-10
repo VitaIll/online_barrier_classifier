@@ -23,7 +23,7 @@ from typing import Optional
 
 from wagie.core.action import Action, ActionKind, Side
 from wagie.core.event import (
-    BarrierTouched, DecisionBar, Event, OrderSubmitted,
+    BarrierTouched, DecisionBar, DriftDetected, Event, OrderSubmitted,
     PositionClosed, RiskPolicyChanged, RiskRejected,
 )
 from wagie.core.identity import OrderId
@@ -97,6 +97,8 @@ class Engine:
         self._audit: list[dict] = []
         self._events: list[Event] = []
         self._n_seen = 0
+        # Cumulative drift counters (for per-bar delta -> DriftDetected events)
+        self._drift_totals_prev: dict[str, int] = {}
 
     def run(self) -> EngineResult:
         try:
@@ -177,6 +179,23 @@ class Engine:
         except Exception as e:
             logger.warning(f"transform_one failed: {e}")
             return
+
+        # 6b. Surface drift signals as DriftDetected events when totals advance.
+        if obs.drift_signals and self.capture_events:
+            for metric, total in obs.drift_signals.items():
+                try:
+                    total_i = int(total)
+                except (TypeError, ValueError):
+                    continue
+                prev = self._drift_totals_prev.get(metric, 0)
+                if total_i > prev:
+                    self._events.append(DriftDetected(
+                        ts_init=ts, instrument=bar.instrument,
+                        detector_name="online_arf",
+                        metric=metric,
+                        value=float(total_i - prev),
+                    ))
+                    self._drift_totals_prev[metric] = total_i
 
         # 7. Dispatch each Action through RiskEngine -> Broker
         actions = obs.actions or ()

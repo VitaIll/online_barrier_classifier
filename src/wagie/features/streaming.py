@@ -44,6 +44,7 @@ class RiverRollingFeature:
         "_rolling",
         "_lag_buf",
         "_n_seen",
+        "_last_segment_id",
     )
 
     def __init__(
@@ -64,6 +65,10 @@ class RiverRollingFeature:
         # is the oldest (about to be consumed by the rolling stat).
         self._lag_buf: collections.deque = collections.deque(maxlen=spec.lag)
         self._n_seen = 0
+        # Segment-aware reset: a 1-min gap in the cleansed feed yields a fresh
+        # segment_id. We must NOT carry rolling state across boundaries (the
+        # cleansed-data invariant). `None` means "uninitialised — adopt next bar".
+        self._last_segment_id: int | None = None
 
     def _make_rolling_stat(self):
         """Build a rolling stat. If factory is a rolling-* class (accepts
@@ -75,7 +80,32 @@ class RiverRollingFeature:
             # Fallback: wrap a non-windowed stat (Mean, Var) in utils.Rolling
             return utils.Rolling(self._stat_factory(), window_size=self.spec.window)
 
+    def _segment_changed(self, x: dict) -> bool:
+        """Return True iff the bar's segment_id differs from the last one.
+        Adopts the new segment_id transparently."""
+        seg = x.get("segment_id")
+        if seg is None:
+            return False
+        try:
+            seg_int = int(seg)
+        except (TypeError, ValueError):
+            return False
+        if self._last_segment_id is None:
+            self._last_segment_id = seg_int
+            return False
+        if seg_int != self._last_segment_id:
+            self._last_segment_id = seg_int
+            return True
+        return False
+
     def update_one(self, x: dict) -> dict:
+        # Segment boundary: reset BEFORE consuming this bar (no value carries
+        # across). Warmup restarts; the first warmup-many bars in the new
+        # segment will emit NaN.
+        if self._segment_changed(x):
+            self._rolling = self._make_rolling_stat()
+            self._lag_buf.clear()
+            self._n_seen = 0
         v = x.get(self._source_col)
         if v is None or (isinstance(v, float) and math.isnan(v)):
             # Don't poison the buffer with NaN; emit NaN this step.
@@ -99,6 +129,7 @@ class RiverRollingFeature:
         self._rolling = self._make_rolling_stat()
         self._lag_buf.clear()
         self._n_seen = 0
+        self._last_segment_id = None
 
     def state_hash(self) -> bytes:
         # Hash the lag buffer + the rolling stat's current value. river stats

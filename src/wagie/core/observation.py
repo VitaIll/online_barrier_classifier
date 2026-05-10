@@ -71,6 +71,11 @@ class Observation:
 
     Each Pipeline stage is a function (Observation) -> Observation that
     *adds* (never removes) information via with_* methods.
+
+    `drift_signals` carries per-iteration drift detector counts surfaced by
+    online stages (e.g. `OnlineARFCorrector` exposes the underlying ARF's
+    ADWIN drift / warning counts since the last `transform`). The Engine
+    consumes this to emit `DriftDetected` events.
     """
 
     bar: DecisionBar
@@ -81,6 +86,7 @@ class Observation:
     q_lo: Mapping[float, float] = field(default_factory=dict)
     in_set: Mapping[float, bool] = field(default_factory=dict)
     actions: tuple = field(default_factory=tuple)   # tuple[Action, ...]
+    drift_signals: Optional[Mapping[str, int]] = None
 
     @property
     def as_of(self) -> Timestamp:
@@ -116,6 +122,10 @@ class Observation:
     def with_actions(self, actions) -> "Observation":
         """Set the sequence of actions emitted by Strategy.decide."""
         return dataclasses.replace(self, actions=tuple(actions))
+
+    def with_drift_signals(self, signals: Mapping[str, int]) -> "Observation":
+        """Attach per-iteration drift signals (counts) emitted by online stages."""
+        return dataclasses.replace(self, drift_signals=dict(signals))
 
     # ---- Convenience: flat-dict view -----------------------------------------
 
