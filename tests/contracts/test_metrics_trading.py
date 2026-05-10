@@ -72,12 +72,17 @@ def test_empty_fills_returns_zero_metrics() -> None:
 
 
 def test_single_fill_psr_fallback_is_half() -> None:
-    """n=1 → std undefined; PSR fallback = 0.5 by contract."""
+    """n=1 → std undefined; PSR fallback = 0.5, Sharpe = 0.0 (no-signal).
+
+    Previously the implementation returned ~1e10 Sharpe via a `max(std, 1e-12)`
+    clamp — silently nonsense. Sharpe on degenerate dispersion is now reported
+    as exactly 0.0 (the "no signal in one observation" semantic).
+    """
     tm = compute_trading_metrics([_fill(0.01)])
     assert tm.n_trades == 1
     assert tm.probabilistic_sharpe == 0.5
-    # std=0 path: sharpe explodes via 1e-12 epsilon — just check finite, > 0.
-    assert math.isfinite(tm.sharpe) and tm.sharpe > 0.0
+    assert tm.sharpe == 0.0
+    assert tm.sortino == 0.0
 
 
 # ---------- Sharpe / PSR formula cross-check -------------------------------

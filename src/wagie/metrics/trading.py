@@ -104,10 +104,18 @@ def compute_trading_metrics(
 
     mean_pnl = float(np.mean(pnl))
     std_pnl = float(np.std(pnl, ddof=1)) if n > 1 else 0.0
-    sr_trade = mean_pnl / max(std_pnl, 1e-12)
+    # Sharpe is undefined on degenerate dispersion. The legacy `max(std, 1e-12)`
+    # clamp produced ~10^11 Sharpe magnitudes on near-constant PnL — silent
+    # nonsense. Explicit zero is the correct "no-signal" semantic.
+    if std_pnl <= 1e-10:
+        sr_trade = 0.0
+    else:
+        sr_trade = mean_pnl / std_pnl
     sharpe = sr_trade * math.sqrt(trades_per_year)
 
-    if n > 3:
+    # Skew/kurt require non-degenerate dispersion; near-constant inputs trigger
+    # scipy "Precision loss in moment calculation" warnings and produce nan/inf.
+    if n > 3 and std_pnl > 1e-10:
         skew = float(scipy_stats.skew(pnl))
         kurt = float(scipy_stats.kurtosis(pnl, fisher=False))
     else:
@@ -119,8 +127,15 @@ def compute_trading_metrics(
     )
 
     downside = pnl[pnl < 0]
-    downside_std = float(np.std(downside, ddof=1)) if len(downside) > 1 else 1e-12
-    sortino = (mean_pnl / max(downside_std, 1e-12)) * math.sqrt(trades_per_year)
+    if len(downside) > 1:
+        downside_std = float(np.std(downside, ddof=1))
+    else:
+        downside_std = 0.0
+    # Same degenerate-dispersion guard as Sharpe.
+    if downside_std <= 1e-10:
+        sortino = 0.0
+    else:
+        sortino = (mean_pnl / downside_std) * math.sqrt(trades_per_year)
 
     eq = np.cumsum(pnl)
     cummax = np.maximum.accumulate(eq)
@@ -143,7 +158,10 @@ def compute_trading_metrics(
     sortino_ci_lo = sortino_ci_hi = None
     max_dd_ci_lo = max_dd_ci_hi = None
     block_length = None
-    if compute_ci and n >= 2:
+    # Bootstrap CIs only when dispersion is non-degenerate. With std≈0 the
+    # bootstrap_sharpe resamples produce nan/inf, which np.quantile then
+    # warns on; downstream consumers see meaningless CI bounds.
+    if compute_ci and n >= 2 and std_pnl > 1e-10:
         from .bootstrap import (
             bootstrap_max_drawdown,
             bootstrap_sharpe,

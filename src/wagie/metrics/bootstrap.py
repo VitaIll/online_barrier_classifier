@@ -227,12 +227,19 @@ def bootstrap_metric(
         samples[b] = float(metric_fn(x[idx]))
 
     alpha = 1.0 - confidence
-    lo, hi = np.quantile(samples, [alpha / 2.0, 1.0 - alpha / 2.0])
+    # Strip non-finite resamples — degenerate inputs (zero variance, no
+    # downside, etc.) can produce inf/NaN which then poisons np.quantile and
+    # emits a "invalid value in subtract" RuntimeWarning. Empty after stripping
+    # ⇒ raise (the caller guards against this with try/except).
+    finite = samples[np.isfinite(samples)]
+    if len(finite) == 0:
+        raise ValueError("all bootstrap resamples produced non-finite metric")
+    lo, hi = np.quantile(finite, [alpha / 2.0, 1.0 - alpha / 2.0])
     out = {
         "estimate": obs,
         "ci_lo": float(lo),
         "ci_hi": float(hi),
-        "se": float(samples.std(ddof=1)) if n_resamples > 1 else 0.0,
+        "se": float(finite.std(ddof=1)) if len(finite) > 1 else 0.0,
         "scheme": scheme,
         "block_length": int(bl),
         "n_resamples": int(n_resamples),
@@ -258,8 +265,11 @@ def _sortino(r: np.ndarray) -> float:
     if len(r) < 2:
         return 0.0
     downside = r[r < 0.0]
+    # Degenerate-downside resamples (zero or one losing trade) cannot yield a
+    # finite Sortino — return NaN so bootstrap_metric strips the sample rather
+    # than poisoning the quantile with inf.
     if len(downside) < 2:
-        return 0.0 if len(downside) == 0 else float("inf") * np.sign(r.mean())
+        return float("nan")
     ds = float(downside.std(ddof=1))
     return float(r.mean() / max(ds, 1e-12))
 

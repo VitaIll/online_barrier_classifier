@@ -1,0 +1,37 @@
+name: baseline_real_btcusdt
+description: |
+  Same protocol as `baseline.yaml`, pointed at real BTCUSDT 1-min data.
+  6-month slice (2024-01-01 → 2024-07-01) so the engine completes in
+  reasonable wall-time. ThresholdGate at τ=0.20, no offline model.
+seed: 42
+
+wagie:
+  data:
+    parquet_path: data/cleansed_data/BTCUSDT/1m.parquet
+    m_minutes: 20
+    start_ts_ms: 1704067200000   # 2024-01-01
+    end_ts_ms:   1719792000000   # 2024-07-01
+  model:
+    catboost_path: null
+    arf:
+      n_models: 10
+      lambda_value: 6.0
+      seed: 42
+  strategy:
+    kind: threshold_gate
+    tau: 0.20
+  broker:
+    inventory_cap: 5
+  runtime:
+    warmup_samples: 96
+
+features:
+  catalog: default
+  n_features: null
+  regime_feature: parkinson_var_rolling_mean_24
+  regime_edges: [1.0e-6, 1.0e-5]
+  regime_labels: [low, med, high]
+
+charts: {enable: true, n_calibration_bins: 10}
+report: {enable: true, title: "baseline — threshold gate — real BTCUSDT 2024 H1"}
+artifacts: {out_dir: artifacts/runs, save_state: true, save_predictions: true}
