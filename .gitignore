@@ -26,6 +26,9 @@ mlruns/
 experiments/mlruns/
 experiments/feature_cache/
 
+# CatBoost training residue
+catboost_info/
+
 # Round-local in-progress files
 RESEARCH/HYPOTHESIS.md.draft
 RESEARCH/.loop_heartbeat.json
