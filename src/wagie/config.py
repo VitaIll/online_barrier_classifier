@@ -25,6 +25,32 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+class BrokerCostModel(BaseModel):
+    """Composable trading-cost model.
+
+    Total per-side cost in log-units is approximately:
+        (taker_fee_bps + 0.5 * spread_bps + slippage_bps_per_unit_size * size) * 1e-4
+
+    Defaults match the legacy flat-1bp/side behaviour so existing YAML keeps
+    working when only `cost_bps: 1.0` is specified at the broker level.
+    """
+
+    taker_fee_bps: float = 1.0
+    spread_bps: float = 0.0
+    slippage_bps_per_unit_size: float = 0.0
+
+    model_config = ConfigDict(extra="forbid")
+
+    def cost_log_per_side(self, size: float = 1.0) -> float:
+        """Per-side cost in log-units. `size` ∈ [0,1] (Probability)."""
+        bps = (
+            float(self.taker_fee_bps)
+            + 0.5 * float(self.spread_bps)
+            + float(self.slippage_bps_per_unit_size) * float(size)
+        )
+        return bps * 1e-4
+
+
 class DataConfig(BaseModel):
     parquet_path: str
     m_minutes: int = 20
@@ -65,14 +91,28 @@ class StrategyConfig(BaseModel):
 
 class BrokerConfig(BaseModel):
     take_profit_log: float = 0.0041113
-    stop_loss_log: float = 0.0041113   # symmetric (D1)
-    cost_bps: float = 1.0
+    # Optional: None ⇒ no stop-loss branch (c_stop = ∞ in audit terminology).
+    stop_loss_log: Optional[float] = 0.0041113   # symmetric (D1); None => no SL
+    cost_bps: float = 1.0                        # legacy flat per-side bps
+    cost_model: Optional[BrokerCostModel] = None # richer cost model; if set, overrides cost_bps
+    tie_break: Literal[
+        "pessimistic_sl_first",
+        "optimistic_tp_first",
+        "probabilistic_hl_bridge",
+    ] = "pessimistic_sl_first"
     execution_latency_minutes: int = 1  # D3
     expiry_minutes: int = 20
     inventory_cap: int = 5             # P1: default 5
     label_alpha: float = 0.0041113     # one-sided excursion (D2)
 
     model_config = ConfigDict(extra="forbid")
+
+    def resolved_cost_model(self) -> BrokerCostModel:
+        """Return a BrokerCostModel — the explicit one if provided, else
+        a flat cost from cost_bps."""
+        if self.cost_model is not None:
+            return self.cost_model
+        return BrokerCostModel(taker_fee_bps=float(self.cost_bps))
 
 
 class CVConfig(BaseModel):
@@ -151,6 +191,6 @@ class WagieConfig(BaseModel):
 
 __all__ = [
     "WagieConfig", "DataConfig", "ModelConfig", "StrategyConfig",
-    "BrokerConfig", "CVConfig", "RuntimeConfig",
+    "BrokerConfig", "BrokerCostModel", "CVConfig", "RuntimeConfig",
     "ARFSubConfig",
 ]

@@ -192,11 +192,107 @@ def build_strategy(kind: str, **kwargs) -> StrategyBase:
     # ThresholdGate / EvCalibratedSize don't take `k` unless they support it.
     if cls is ThresholdGate:
         kwargs.pop("k", None)
+    # Special-case: regime_gated takes a base_kind to wrap.
+    if kind == "regime_gated":
+        return _build_regime_gated(**kwargs)
     return cls(**kwargs)
+
+
+# -----------------------------------------------------------------------------
+# RegimeGatedStrategy decorator
+# -----------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class RegimeGatedStrategy(StrategyBase):
+    """Decorator that suppresses any non-HOLD action whose underlying base
+    strategy emitted them when ``obs.regime_id`` is not in ``allowed_regimes``.
+
+    Allows actions through unchanged when the regime gate passes — including
+    SCALE_OUT/CLOSE/MODIFY_STOP/CANCEL on existing positions, which we DO
+    NOT suppress in any regime (you must always be allowed to manage
+    existing inventory).
+
+    Construct with ``RegimeGatedStrategy(base=ThresholdGate(...), allowed_regimes=(0,))``
+    or via the registry: ``build_strategy("regime_gated", base_kind="threshold_gate",
+    allowed_regimes=[0], ...)``.
+    """
+
+    base: Optional[StrategyBase] = None
+    allowed_regimes: tuple[int, ...] = ()
+
+    def __post_init__(self):
+        if self.base is None:
+            raise ValueError("RegimeGatedStrategy requires `base` strategy")
+
+    def decide(self, frame: Observation, ctx: StrategyContext) -> Sequence[Action]:
+        actions = self.base.decide(frame, ctx)
+        # Always pass through inventory-management actions regardless of regime.
+        always_allowed = {
+            ActionKind.HOLD, ActionKind.CLOSE, ActionKind.SCALE_OUT,
+            ActionKind.MODIFY_STOP, ActionKind.CANCEL,
+        }
+        regime = frame.regime_id
+        if regime is None:
+            # No regime yet ⇒ default to suppression of opens/scale-ins (conservative)
+            return tuple(a for a in actions if a.kind in always_allowed)
+        if int(regime) in self.allowed_regimes:
+            return actions
+        # Regime not allowed: suppress opens/scale-ins; allow management.
+        return tuple(a for a in actions if a.kind in always_allowed)
+
+    def state_hash(self) -> bytes:
+        h = hashlib.sha256()
+        h.update(b"regime_gated|")
+        h.update(self.base.state_hash())
+        h.update(b"|")
+        h.update(repr(tuple(sorted(self.allowed_regimes))).encode())
+        return h.digest()
+
+
+def _build_regime_gated(
+    *,
+    base_kind: str,
+    allowed_regimes,
+    name: str = "regime_gated",
+    **base_kwargs,
+) -> "RegimeGatedStrategy":
+    """Factory used by build_strategy('regime_gated', ...).
+
+    Builds the inner base strategy by name then wraps it. ``base_kwargs`` are
+    forwarded to the inner strategy constructor.
+    """
+    if base_kind == "regime_gated":
+        raise ValueError("regime_gated cannot wrap regime_gated")
+    if base_kind not in STRATEGY_REGISTRY:
+        raise ValueError(
+            f"unknown base_kind {base_kind!r}; valid: "
+            f"{[k for k in STRATEGY_REGISTRY if k != 'regime_gated']}"
+        )
+    base_cls = STRATEGY_REGISTRY[base_kind]
+    base_strategy = base_cls(**base_kwargs)
+    allowed = tuple(int(r) for r in allowed_regimes)
+    return RegimeGatedStrategy(
+        name=name,
+        base=base_strategy,
+        allowed_regimes=allowed,
+        # Inherit barrier defaults from the inner strategy so engine wiring
+        # (which inspects take_profit/stop_loss/expiry on the outer object)
+        # still gets sensible values.
+        take_profit=base_strategy.take_profit,
+        stop_loss=base_strategy.stop_loss,
+        expiry=base_strategy.expiry,
+        side=base_strategy.side,
+    )
+
+
+# Register after class definition so builder lookup resolves it.
+STRATEGY_REGISTRY["regime_gated"] = RegimeGatedStrategy
 
 
 __all__ = [
     "Strategy", "StrategyContext", "StrategyBase",
     "ThresholdGate", "PureConformalGate", "EvCalibratedSize",
+    "RegimeGatedStrategy",
     "STRATEGY_REGISTRY", "build_strategy",
 ]

@@ -484,3 +484,87 @@ def test_binance_broker_stub():
         bb.submit(None)
     with _pytest.raises(NotImplementedError):
         bb.cancel(0)
+
+
+# ---- BrokerCostModel edge cases ----------------------------------------------
+
+
+def test_cost_model_replaces_flat_cost_in_close():
+    """If a richer cost_model is wired the close PnL must reflect it.
+
+    Build a position, close it manually, and check that the realized log-PnL
+    differs between flat 1bp and a model with spread + slippage.
+    """
+    from wagie.config import BrokerCostModel
+    base_ms = 1_700_000_000_000
+    # Flat 1bp baseline
+    bro_flat = SimBroker(cost=1e-4)
+    bro_flat.dispatch(_open_action(), ts=Timestamp.from_ms(base_ms), instrument=INSTR)
+    bar = _activate_pending(bro_flat, base_ms)
+    pid = next(iter(bro_flat.portfolio().positions.keys()))
+    bro_flat.dispatch(Action.close(pid), ts=bar.close_time, instrument=INSTR)
+    pnl_flat = bro_flat.portfolio().get(pid).realized_pnl_log
+
+    # Richer model: 1bp fee + 1.5bp spread + 0.5bp/unit slippage at size=1.0
+    # ⇒ per-side bps = 1.0 + 0.75 + 0.5 = 2.25 bps  > 1bp
+    cm = BrokerCostModel(taker_fee_bps=1.0, spread_bps=1.5, slippage_bps_per_unit_size=0.5)
+    bro_rich = SimBroker(cost=1e-4, cost_model=cm)
+    bro_rich.dispatch(_open_action(), ts=Timestamp.from_ms(base_ms), instrument=INSTR)
+    bar = _activate_pending(bro_rich, base_ms)
+    pid_rich = next(iter(bro_rich.portfolio().positions.keys()))
+    bro_rich.dispatch(Action.close(pid_rich), ts=bar.close_time, instrument=INSTR)
+    pnl_rich = bro_rich.portfolio().get(pid_rich).realized_pnl_log
+
+    # The richer model must produce a STRICTLY MORE NEGATIVE realized PnL.
+    assert float(pnl_rich) < float(pnl_flat)
+    # And the difference per side ≈ (2.25 - 1.0)bps * 2 sides * size=1 = 2.5bps
+    diff = float(pnl_flat) - float(pnl_rich)
+    assert abs(diff - (2.5e-4)) < 1e-6
+
+
+def test_cost_model_spread_above_tick_size_still_works():
+    """A spread of 100bps (1%) — comfortably above any sensible tick size on
+    BTCUSDT — must not panic the broker; it simply makes trading expensive."""
+    from wagie.config import BrokerCostModel
+    base_ms = 1_700_000_000_000
+    cm = BrokerCostModel(taker_fee_bps=1.0, spread_bps=100.0, slippage_bps_per_unit_size=0.0)
+    bro = SimBroker(cost=1e-4, cost_model=cm)
+    bro.dispatch(_open_action(), ts=Timestamp.from_ms(base_ms), instrument=INSTR)
+    bar = _activate_pending(bro, base_ms)
+    pid = next(iter(bro.portfolio().positions.keys()))
+    bro.dispatch(Action.close(pid), ts=bar.close_time, instrument=INSTR)
+    pnl = bro.portfolio().get(pid).realized_pnl_log
+    # Cost dominates: per side = 1 + 50 = 51bps; round-trip ≈ 102bps loss.
+    assert float(pnl) < -50e-4
+
+
+def test_cost_model_slippage_scales_with_size():
+    """slippage_bps_per_unit_size must produce LARGER costs at LARGER sizes."""
+    from wagie.config import BrokerCostModel
+    base_ms = 1_700_000_000_000
+    cm = BrokerCostModel(taker_fee_bps=0.0, spread_bps=0.0, slippage_bps_per_unit_size=10.0)
+
+    pnls = {}
+    for size in (0.25, 1.0):
+        bro = SimBroker(cost=0.0, cost_model=cm, inventory_cap=1)
+        a = Action.open(side=Side.LONG, size=Probability(size),
+                        take_profit=TP, stop_loss=SL, expiry=EXP)
+        bro.dispatch(a, ts=Timestamp.from_ms(base_ms), instrument=INSTR)
+        bar = _activate_pending(bro, base_ms)
+        pid = next(iter(bro.portfolio().positions.keys()))
+        bro.dispatch(Action.close(pid), ts=bar.close_time, instrument=INSTR)
+        pnls[size] = float(bro.portfolio().get(pid).realized_pnl_log)
+
+    # Per-side cost is proportional to size; round-trip cost on size=1.0 is
+    # strictly greater (more negative pnl) than on size=0.25.
+    assert pnls[1.0] < pnls[0.25]
+
+
+def test_finalize_records_new_config_fields():
+    """Ledger config must surface stop_loss_log, tie_break, and cost_model."""
+    bro = SimBroker(stop_loss_log=None, tie_break="optimistic_tp_first")
+    led = bro.finalize()
+    assert led.config["stop_loss_log"] is None
+    assert led.config["tie_break"] == "optimistic_tp_first"
+    assert "cost_model" in led.config
+    assert "taker_fee_bps" in led.config["cost_model"]

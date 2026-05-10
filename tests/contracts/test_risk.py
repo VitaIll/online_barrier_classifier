@@ -136,3 +136,75 @@ def test_risk_engine_hot_swap():
     assert "max_positions" not in eng.policy_names
     assert any(c["op"] == "remove" and c["name"] == "max_positions"
                for c in eng.changes)
+
+
+# ---- RiskEngine.default() now wires four policies for realistic backtests ----
+
+
+def test_default_engine_wires_four_policies():
+    """Default engine must include MaxPositions + MaxDrawdown + MaxLossPerPosition +
+    KillSwitch — the audit recommendation for default-safe backtests."""
+    eng = RiskEngine.default()
+    names = set(eng.policy_names)
+    assert {
+        "max_positions",
+        "max_drawdown",
+        "max_loss_per_position",
+        "kill_switch",
+    }.issubset(names)
+    assert len(eng.policies) >= 4
+
+
+def test_default_engine_max_dd_threshold_is_30pct():
+    """Audit recommendation: default max_dd is -0.30 (30% peak-to-trough)."""
+    eng = RiskEngine.default()
+    p = eng.get("max_drawdown")
+    assert p is not None
+    assert abs(p.max_dd - (-0.30)) < 1e-9
+
+
+def test_default_engine_rejects_open_at_drawdown_breach():
+    """An open at deep drawdown must be rejected by the wired MaxDrawdownPolicy."""
+    eng = RiskEngine.default()
+    pf = dataclasses.replace(
+        Portfolio(),
+        realized_pnl_log=LogReturn(-0.40),    # -40% from 0 peak
+        high_water_mark_log=LogReturn(0.0),
+    )
+    r = eng.check(_mk_open_action(), pf, Timestamp(1))
+    assert not r.approved
+    assert r.policy_name == "max_drawdown"
+
+
+def test_default_engine_max_loss_per_position_default_is_5pct():
+    """Default cap on per-position SL is 5% (0.05 log-units)."""
+    eng = RiskEngine.default()
+    p = eng.get("max_loss_per_position")
+    assert p is not None
+    assert abs(p.max_loss - 0.05) < 1e-9
+
+
+def test_default_engine_kill_switch_starts_disengaged():
+    """default_armed() returns a wired-but-NOT-firing kill switch — operator
+    must explicitly engage."""
+    eng = RiskEngine.default()
+    ks = eng.get("kill_switch")
+    assert ks is not None
+    assert ks.engaged is False
+    # Verify operator can engage it and it then blocks opens.
+    ks.engage("manual halt")
+    r = eng.check(_mk_open_action(), Portfolio(), Timestamp(1))
+    assert not r.approved
+    assert r.policy_name == "kill_switch"
+
+
+def test_kill_switch_default_armed_factory():
+    """KillSwitchPolicy.default_armed(armed=False) returns a fully-disengaged
+    policy with no operator intent metadata."""
+    ks = KillSwitchPolicy.default_armed(armed=False)
+    assert ks.engaged is False
+    assert ks.reason == ""
+
+    ks_armed = KillSwitchPolicy.default_armed(armed=True)
+    assert ks_armed.engaged is False         # armed != engaged
+    assert ks_armed.reason != ""
