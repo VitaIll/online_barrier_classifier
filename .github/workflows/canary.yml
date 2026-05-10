@@ -1,0 +1,36 @@
+name: Canary
+
+# T7 + T7-meta no-leakage canary. Runs on EVERY push and PR. Posts a check
+# named `canary` to the PR. If this is red, no result the harness reports can
+# be trusted — the offline-then-online predict-then-learn invariant has been
+# broken or the canary itself was deleted.
+#
+# This is intentionally a separate workflow from `CI` so that:
+#   - the canary visibly gates the PR check list with its own name
+#   - operators can require this check independently of the broader test matrix
+#   - failures here are immediately attributable to the leakage axis, not lost
+#     in a long contract-test run
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  canary:
+    name: T7 cheat-feature canary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Run canary
+        run: python -m pytest tests/contracts/test_no_leakage_canary.py -v --tb=short
+      - name: Run meta-contract suite check
+        run: python -m pytest tests/contracts/test_meta_contract_suite.py -v --tb=short
