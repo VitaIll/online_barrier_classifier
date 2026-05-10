@@ -235,5 +235,15 @@ def test_trading_metrics_to_dict_keys() -> None:
         "total_log_return", "total_pct_return",
         "sharpe", "probabilistic_sharpe", "sortino",
         "max_drawdown_log", "cdar_5pct_log",
+        # CI block (round-040 additive port from src/bootstrap.py).
+        "sharpe_ci_lo", "sharpe_ci_hi",
+        "sortino_ci_lo", "sortino_ci_hi",
+        "max_dd_ci_lo", "max_dd_ci_hi",
+        "block_length", "n_bootstrap",
     }
     assert set(d) == expected
+    # When compute_ci=False (default) the CI fields are None.
+    for k in ("sharpe_ci_lo", "sharpe_ci_hi", "sortino_ci_lo",
+              "sortino_ci_hi", "max_dd_ci_lo", "max_dd_ci_hi",
+              "block_length", "n_bootstrap"):
+        assert d[k] is None
