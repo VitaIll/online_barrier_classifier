@@ -8,7 +8,10 @@ The loop runs **in a single Claude Code session**, self-scheduled via `ScheduleW
 
 `online_barrier_classifier` is a **two-layer hierarchical classifier**.
 `p_online` is the **system output**; `p_offline` is an **input** to the online
-layer, not a parallel signal:
+layer, not a parallel signal. **The previous Mondrian-ACI conformal layer on
+top of `p_online` has been REMOVED** (post-conformal-removal wave, 2026-05-10).
+Calibration of `p_online` now comes from the ARF bagging + ADWIN drift surfacing
+alone; gating is by `ThresholdGate(p_online >= tau)`.
 
 ```
 Binance 1m kline → 20m decision bars (DecisionBarAggregator, gap-aware)
@@ -17,30 +20,31 @@ Binance 1m kline → 20m decision bars (DecisionBarAggregator, gap-aware)
    → split: chronological, train_fraction=0.6, val_fraction (of train)=0.2
 
   ┌─ Layer 1 (OFFLINE) ──────────────────────────────────────────────┐
-  │  CatBoost (langevin=True, Ordered, MVS, SqrtBalanced)            │
+  │  CatBoost (frozen .cbm; langevin=True, Ordered, MVS, SqrtBalanced)│
   │  → p_offline                                                     │
   │  top_k_features=120 selected by CatBoost importance              │
   └──────────────────────────────────────────────────────────────────┘
                               │
                               │  z_k = (selected_features_k, p_offline_k)
                               ▼
-  ┌─ Layer 2 (ONLINE — streaming conformal coverage layer) ──────────┐
-  │  River ARFClassifier(n_models=100, max_features=log2,            │
+  ┌─ Layer 2 (ONLINE — bagging-calibrated streaming layer) ──────────┐
+  │  River ARFClassifier(n_models, max_features=log2,                │
   │                      split_criterion=hellinger, max_depth=15,    │
   │                      leaf_prediction=nba, lambda=6,              │
   │                      ADWIN warning δ=0.005, drift δ=0.0005,      │
   │                      clock=64)                                   │
-  │  consumes z_k and emits p_online — CALIBRATED probability,       │
-  │  effectively the regime-conditional conformal-coverage estimate. │
+  │  consumes z_k and emits p_online — CALIBRATED probability via     │
+  │  bagging across the ARF members. ADWIN drift signals are surfaced │
+  │  to the metrics dict (no separate conformal layer).               │
   │  This is the SYSTEM OUTPUT.                                      │
   └──────────────────────────────────────────────────────────────────┘
                               │
                               ▼
    predict-then-learn-with-delayed-label prequential evaluation
-   (notebooks/online_eval.ipynb is the canonical implementation;
-   `p_final = p_online` in that notebook by definition).
-   The streaming Mondrian-ACI conformal layer in `src/conformal.py`
-   sits on top of `p_online`, NOT `p_offline`.
+   (the LabelBuffer Pipeline stage is the canonical implementation).
+   Gating is `ThresholdGate(p_online >= tau)`; tau is chosen on a
+   validation Sharpe / Brier sweep (sibling RIGOR enforces the
+   accept-gate via bootstrap CIs).
 ```
 
 **WHAT THIS IS NOT** (round-015 corrective; sibling-style framings are
@@ -51,12 +55,14 @@ falsifications of the architecture and have been deleted from the codebase):
   `(p_offline, p_online)`) regresses the child onto its parent and is
   architecturally invalid. Such combiners must NOT appear in the strategy
   registry; tests pin this.
-- The conformal layer's `q_t` is computed from `p_online`, not `p_offline`
-  (round-008 contract). Driving Mondrian-ACI off `p_offline` ignores the
-  online layer's correction and produces nonsense `in_set_α` indicators.
 - "Use online to correct offline" is satisfied IMPLICITLY by the architecture
   itself — `p_online` IS the corrected output. There is no second
   "correction" step that ranks the two layers' outputs against each other.
+- **No separate conformal layer.** The Mondrian-ACI stage on top of `p_online`
+  has been removed (post-conformal-removal wave, 2026-05-10). Calibration of
+  `p_online` is provided by the ARF bagging + ADWIN drift surfacing. Anything
+  that re-adds an in-band Mondrian-ACI Pipeline stage is a regression and must
+  go through a research round before merging.
 
 **Current accepted constants** (mirror `config/*.yaml` and `artifacts/offline_model/config_snapshot.json`):
 
@@ -79,13 +85,17 @@ falsifications of the architecture and have been deleted from the codebase):
 | Test sample count | 31,486 | `artifacts/online_eval/metrics.json` |
 | Test positive rate | 0.0971 | `artifacts/online_eval/metrics.json` |
 
-**Legacy results** (pre-loop baseline; this is what every modeling round must improve on):
+**Legacy results** (pre-wagie-harness baseline; KEEPABLE in principle but not
+re-rendered yet under the post-conformal-removal accept-gate format):
 
 - Offline test: ROC=0.813, PR=0.356, Brier=0.090
-- Online (final) test: ROC=0.799, PR=0.331, Brier ≈ 0.076 (verified by recomputation in earlier session: -16% vs offline)
-- Calibration: offline systematically over-predicts (mean p ≈ 0.20 vs base rate 0.097), online is essentially diagonal across deciles
+- Online (final) test: ROC=0.799, PR=0.331, Brier ≈ 0.076 (-16% vs offline)
+- Calibration: offline systematically over-predicts (mean p ≈ 0.20 vs base rate 0.097); online ARF essentially diagonal across deciles
 
-**The economic axis is unmeasured to date.** No PnL number exists yet. H-005 produces the first one.
+**All economic claims from the legacy `simulate_inventory_aware_sized` harness
+(rounds 015..031) are REVOKED pending wagie replay.** See
+`RESEARCH/HEALTH_OF_RESULTS.md` for the revocation list and
+`experiments/replay_r031_low_vol_gate.yaml` for the highest-priority replay spec.
 
 ## I. Causality invariants (HARD; tested)
 
@@ -97,7 +107,7 @@ These reflect `online_barrier_classifier`'s actual implementation, NOT the sibli
 4. **No NaN dropping for engineered features.** This project's current implementation does NOT yet use the `undef__*` flag-as-input pattern; NaNs are filled inside the streaming feature extractors (e.g., `safe_divide` returns a neutral value with a flag). When a round adds a new feature that can be undefined, it must follow the same flag-and-impute discipline. Adding the formal `undef__*` flag pattern as a sibling-imported convention is BACKLOG H-103.
 5. **Label diagnostics never used as features.** The label is `y_k = 1[ ln(H_{k+1} / C_k) ≥ α ]`, with α calibrated on training-only excursions (90th percentile, currently α ≈ 0.00411). The boundary `close`, `high`, and the calibrated α must never be in any feature column the model sees.
 6. **Boundary observation rule** ([spec §5.2](docs/online_barrier_classifier_spec.md)): the decision bar `X_k` is the aggregation of minute bars `[k·M, (k+1)·M)`; features at `k` use only `X_0..X_k`; the label depends only on `H_{k+1}` (next bar's high), which is realized after `k`'s features are fixed.
-7. **Prequential discipline (online stage).** The streaming conformal coverage layer must follow predict-then-learn-with-delayed-label. Specifically: at decision bar `k`, predict `p_online_k` using `(features_k + p_offline_k)` first; only when bar `k+1` arrives, compute `y_k` from `H_{k+1}`, then call `learn_one(z_{k}, y_k)` on the streaming model. The current `notebooks/online_eval.ipynb` implements this via a `label_buffer` deque — that idiom is the contract.
+7. **Prequential discipline (online stage).** The streaming online layer must follow predict-then-learn-with-delayed-label. Specifically: at decision bar `k`, predict `p_online_k` using `(features_k + p_offline_k)` first; only when bar `k+1` arrives, compute `y_k` from `H_{k+1}`, then call `learn_one(z_{k}, y_k)` on the streaming model. The `wagie.pipeline.label_buffer.LabelBuffer` Pipeline stage implements this — that idiom is the contract.
 
 ## II. Process invariants
 1. **Single branch (`master`), commit per accepted round.** No `agent/round-*` branches, no draft PRs, no merge ceremony. CRITIC must pass before commit; killed rounds get a `KILL_LIST.md` entry and no commit. Every accepted round gets a `round-NNN-accepted` tag.
@@ -114,12 +124,16 @@ A round resolves to one of three outcomes:
 - **`kill`**: hypothesis falsified or not worth the cost. Appended to KILL_LIST with reason. Branch deleted.
 
 ## IV. Primary success metrics (priority order)
-1. **For online-stage rounds (the conformal coverage layer)**: empirical coverage (marginal AND per-regime) at α ∈ {0.05, 0.10, 0.20}; prediction-set tightness (avg interval width); coverage gap = 1 - α - empirical_coverage stratified by volatility tercile. **NOT** raw Brier/ROC — the online layer trades ranking for coverage.
-2. **For offline-stage rounds**: out-of-sample probability quality — Brier-Skill-Score (= 1 - Brier_model / Brier_base_rate) + log-loss + Expected Calibration Error (ECE).
-3. **Regime-stratified calibration** — ECE/Brier in each volatility tercile (low/med/high). Apply `pd.qcut(vol_proxy, 3)` on a fixed feature-derived signal (e.g., a long-window `parkinson_var_rolling_mean_*` chosen once and kept fixed across rounds).
-4. **Risk-adjusted economic metric** — once `src/backtest.py` lands a real-data run (H-005), deflated Sharpe of an inventory-aware policy with realistic transaction costs becomes the headline accept gate. Until then, BSS + coverage are the gates.
+
+**Calibration leads.** Post-conformal-removal: the online layer's value shows in
+`p_online` calibration (Brier / ECE with bootstrap CI), not in coverage. The
+previous "coverage gap" framing was tied to the Mondrian-ACI layer, which is gone.
+
+1. **Probability quality of `p_online` (PRIMARY)** — Brier-Skill-Score (= 1 - Brier_model / Brier_base_rate), log-loss, and Expected Calibration Error (ECE), with stationary-block-bootstrap CI for Brier and stratified-bootstrap CI for ECE. Reliability diagram (`charts/reliability_diagram.png`) is produced before any other chart per run.
+2. **Regime-stratified calibration** — ECE/Brier in each volatility tercile (low/med/high). Apply `pd.qcut(vol_proxy, 3)` on a fixed feature-derived signal (e.g., a long-window `parkinson_var_rolling_mean_*` chosen once and kept fixed across rounds). Per-regime Wilson intervals on the reliability bins.
+3. **Risk-adjusted economic metric** — deflated Sharpe of the chosen `ThresholdGate(p_online >= tau)` strategy under realistic transaction costs (sibling TRADING owns the cost model). The accept gate is bootstrap-CI lower bound on per-bar Sharpe exceeding `predicted_effect_min` AND `n_trades >= min_n_trades`.
 4. **Discrimination** (ROC-AUC, PR-AUC) — secondary; cannot be the primary justification for an accept.
-5. **Uncertainty-conditioned trade quality** — predictive interval width vs. PnL conditional on UQ thresholds.
+5. **Drift signals** — ADWIN warning + drift counts per session, surfaced in `metrics.json` (sibling STREAMING). A drift event with no corresponding rolling-Brier degradation is flagged for human review; auto-retrain on drift is explicitly out-of-scope for v1.
 
 ROC-AUC alone never accepts a hypothesis. (See sibling project `online_barrier_classifier` for an example where higher ROC came at calibration's expense.)
 

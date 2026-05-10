@@ -1,21 +1,44 @@
 # Hypothesis Backlog
 
+> **POST-CONFORMAL-REMOVAL BANNER (2026-05-10)**: H-202..H-209 (the Mondrian-ACI
+> variants and adaptive-conformal-inference cards) are SUPERSEDED. The Mondrian-ACI
+> conformal layer has been removed in this commit's wave (sibling ARCH owns the
+> cleanup). The new strategy is `ThresholdGate(p_online >= tau)`. See
+> [`docs/concepts.md`](../docs/concepts.md) for the new architecture and
+> [`RESEARCH/REPORT.md`](REPORT.md) for the headline. Cards labelled SUPERSEDED
+> below should not be activated by the loop without first re-introducing the
+> conformal layer through a research round.
+>
+> **All cards that referenced deleted scripts (`scripts/phase_A_round_*.py`,
+> `scripts/round_010_no_stop_backtest.py`, etc.) have been pruned or updated to
+> reference `wagie experiment run <spec.yaml>` instead.** Reproduction now goes
+> through the wagie harness (`experiments/baseline.yaml`,
+> `experiments/replay_r031_low_vol_gate.yaml`, etc.).
+
 The autonomous loop targets `online_barrier_classifier`. The architecture is:
 
 ```
-offline CatBoost  →  p_offline
-                     +
-              streaming conformal calibration layer  →  P(y=1 | x_k)
-                                                          (conditional coverage)
+offline CatBoost  ->  p_offline
+                       +
+              River ARF (bagging-calibrated streaming online layer)  ->  p_online
+                                                                          (calibrated probability;
+                                                                           system output)
+                       +
+              ThresholdGate(p_online >= tau)  ->  decisions
 ```
 
-The "online stage" (currently River `ARFClassifier`, fed `selected_features + p_offline`) is a **streaming conformal calibration / coverage layer**, not a separate classifier. The differentiator vs the sibling `barrier_classifier` (offline-only) is exactly this layer, and most "online improvements" are framed as conformal-coverage improvements (ACI, Mondrian-ACI, locally-weighted conformal, etc.).
+The "online stage" (River `ARFClassifier`, fed `selected_features + p_offline`)
+is a **bagging-calibrated streaming layer with ADWIN drift surfacing** — NOT
+a separate classifier and (post 2026-05-10) NOT a conformal layer. Its calibration
+properties (regime-flat ECE, low Brier vs offline) come from the bagging across
+ARF members; the ADWIN signal flags drift but does not trigger a coverage update.
 
-User asks 2 (online) and 6 (UQ) collapse onto one axis: **improve the streaming conformal coverage layer.**
+User asks 2 (online) and 6 (UQ) collapse onto one axis: **improve `p_online`
+calibration (Brier / ECE with bootstrap CI), surface drift cleanly, gate
+intelligently** — NOT improve the (removed) conformal coverage layer.
 
-Status legend: `queued` / `in_progress` / `iterate` / `blocked`. Priority P1–P5 = expected α-on-user-goal / cost.
-
-Top of file = highest priority.
+Status legend: `actionable` / `blocked` / `superseded`. Priority P1-P5 = expected
+α-on-user-goal / cost. Top of file = highest priority.
 
 ---
 
@@ -64,8 +87,8 @@ Top of file = highest priority.
 - **Asks**: ask 4 (alpha discovery)
 - **Mechanism**: round-009 showed that under the current label (`max excursion ≥ α`) + triple-barrier backtest (φ=c_stop=α, cost 1bp/side), the validation-chosen τ produces test Sharpe ≈ 0. Two label/strategy variations are worth measuring on the same harness: (a) **no-stop backtest** (`c_stop`=∞ or large) — matches the implicit "open long, take profit at +α, exit at close otherwise" strategy of the current upper-barrier label; this is the most direct fix to the label/backtest mismatch we surfaced earlier in conversation; (b) **first-touch label retraining** (LdP triple-barrier label `1[upper hit before lower]`) — full alignment of label and backtest, but invalidates accumulated positives. Run (a) first because cheap (no retrain): just re-run round 009 with `c_stop=10*α`, see whether the val-chosen τ now produces real test Sharpe.
 - **Falsification**: under (a), val-chosen τ produces test Sharpe > 0.5 with p_boot < 0.05 → label/backtest mismatch was the binding constraint. Otherwise the model genuinely has no edge at this horizon.
-- **Status**: KILLED (round-010 in_progress, never completed; see KILL_LIST). *Refinement (round-015)*: H-024 should now run against the round-015 harness (`scripts/phase_A_round_015.py`) under the corrected two-layer architecture, with `c_stop=∞` swept against all 5 valid strategies (`baseline_offline_tau`, `baseline_online_tau`, `conformal_gate_tau`, `mondrian_aci_size`, `null_random_at_rate`). The `simulate_inventory_aware_sized` harness already supports `c_stop=float("inf")` (tested). Multi-strategy DSR with n_trials=85 (5 strategies × their respective grids) decides whether the no-stop variant rescues *any* of the 5. The H-304 prioritisation card ranks this as the cheapest test of the binding-constraint hypothesis. **Forbidden**: any reintroduction of sibling-style `(p_offline, p_online)` combiners (round-015 contract).
-- **Cost**: low (re-run round 009 with one parameter change). *Refinement*: under the unified Phase A harness it's a 2-line config change + one Phase-A re-run, ~5 minutes wall.
+- **Status**: KILLED (round-010 in_progress, never completed; see KILL_LIST). *Post-conformal-removal refinement*: H-024 should now run as a wagie spec (`experiments/baseline_with_offline_no_stop.yaml`, NEW spec — caller adds it) with `wagie.broker.stop_loss_log: 1.0e9` (effectively c_stop=∞), `threshold_gate(p_offline)`, and the accept-gate fields. The `conformal_gate_tau` and `mondrian_aci_size` strategies referenced in the round-015 framing are GONE; only `threshold_gate` and `regime_gated` survive (and `null_random_at_rate` as a comparator if sibling TRADING ports it). **Forbidden**: any reintroduction of sibling-style `(p_offline, p_online)` combiners.
+- **Cost**: low — one new YAML spec + `wagie experiment run` (~5 minutes wall).
 
 ### H-304 [P5] Strategy-axis prioritisation — 2×2 decision matrix with breakeven calc (Ask 5 synthesis)
 - **Owner**: THEORIST + IMPLEMENTER
@@ -87,7 +110,7 @@ Top of file = highest priority.
   - **No-skill on timeouts** (selection improves p_TP but conditional drift is unbiased; ε = -p·α/(1-p) = -0.000442 at p=0.097): breakeven `p_TP ≥ (c + 0.000442)/(α + 0.000442) = 0.000642/0.004552 = **14.1%**`.
   - **Worst case** (all timeouts hit −α equivalent; ε = -α): breakeven `p_TP ≥ (1 + c/α)/2 = (1 + 0.0487)/2 = **52.4%**`.
 
-  Round-009 empirical hit_rate=0.525 at val-tau=0.44 under SYMMETRIC barriers (TP=+α, SL=−α, timeout mixed). The symmetric hit_rate fraction *includes* SL losses, so the equivalent **p_TP under symmetric** is approximately `n_tp / n_trades`, which round-015's `RESEARCH/diagrams/phase_A/round_015/headline.json` exposes per strategy. **Empirically, if `p_TP_symmetric` ≥ ~30% at val-τ=0.44**, the no-stop variant comfortably exceeds the 14.1% bar and should produce positive test Sharpe; if `p_TP_symmetric` < 14% the no-stop variant still loses. The ratio between symmetric `p_TP` and no-stop `p_TP` is ≈ 1 (both measure "did upper barrier hit within M=20 bars"); H-024's run will produce the headline number directly.
+  Round-009 empirical hit_rate=0.525 at val-tau=0.44 under SYMMETRIC barriers (TP=+α, SL=−α, timeout mixed). The symmetric hit_rate fraction *includes* SL losses, so the equivalent **p_TP under symmetric** is approximately `n_tp / n_trades`, which the H-024 wagie spec's `metrics.json::trading.tp_count / n_trades` will expose directly. **Empirically, if `p_TP_symmetric` ≥ ~30% at val-τ=0.44**, the no-stop variant comfortably exceeds the 14.1% bar and should produce positive test Sharpe; if `p_TP_symmetric` < 14% the no-stop variant still loses. The H-024 run produces the headline number directly. (The round-015 `headline.json` referenced in pre-wagie versions of this card no longer exists; that script was deleted in commit `61ce420`.)
 
   **Order of operations**: (1) H-024 no-stop unified Phase A run — cheapest, decides whether label/backtest mismatch was binding. (2) If H-024 fails (multi-DSR < 0.95 still), H-023 first-touch label retraining — expensive but most aligned. (3) Sized variants H-302/H-025 after a positive base strategy emerges. **Forbidden until H-304 is closed**: any new strategy variant card. The 2×2 above is the gating doc.
 - **Predicted effect**: zero (synthesis card; the value is the gating discipline).
@@ -102,12 +125,7 @@ Top of file = highest priority.
 - **H-025** (sized) — see H-025's existing addendum (above) on σ-sizing vs σ-abstention.
 
 ### H-025 [P4] (spawned by round 009) Sized entries via Mondrian-ACI confidence
-- **Owner**: IMPLEMENTER
-- **Asks**: ask 4 + ask 6 — using the conformal layer to drive economic decisions
-- **Mechanism**: Mondrian-ACI (round 008) gives a per-regime adaptive q_t — effectively a per-regime confidence bar. Open long when p ≥ q_t (i.e., when the prediction set is the singleton {1}); size proportional to a measure of confidence (e.g., `max(0, p - q_t)` truncated). Test on the validation window, pick a sizing rule, evaluate on test. The hypothesis is that the binary p ≥ τ rule is throwing away information that q_t has already extracted.
-- **Falsification**: sized variant beats binary at val-chosen-rule (under the same tau* → q_t mapping) by Sharpe > 0.3 on test, with p_boot < 0.10.
-- **Status**: queued (depends on round 009 H-024 to first establish whether ANY binary edge exists; if H-024 says no, sizing is a tax on noise).
-- **Cost**: medium
+- **Status: SUPERSEDED**. The Mondrian-ACI per-regime `q_t` no longer exists. Replacement: `EvCalibratedSize(k * margin)` where `margin = max(0, p_online - tau)` — a direct margin-on-the-bagging-calibrated-probability sizing rule. The "sized vs binary" question collapses to a sweep on `EvCalibratedSize.k`, expressible as a 5-spec multi-doc YAML similar to `experiments/sweep_alpha.yaml`.
 
 *Refinement (round-014/015, addendum from Ask 2)*: H-025 (sized via Mondrian-ACI on `p_online`) and H-302 (σ-epistemic *abstention* on top of `p_online`) are NOT the same hypothesis and must not be conflated. **H-025** *scales* position size by the per-regime conformal confidence on `p_online` (`size = clip(k · max(0, p_online − (1 − q_lo_α)), 0, 1)`) — every above-threshold opportunity is taken, only at differing magnitude. **H-302** *gates* trade entry by a CatBoost-virtual-ensemble σ_epistemic on top of the chosen base strategy — when σ is above a val-chosen threshold, the trade is skipped entirely (size = 0). The two interact: H-025 uses the conformal q_t (a coverage-derived signal that includes both aleatoric and epistemic noise); H-302 isolates the epistemic component. Round-015 (corrected two-layer architecture) showed `mondrian_aci_size` at k\*=20 producing test Sharpe=−5.67 with p_boot=0.505 (no edge after deflation; cross-strategy DSR=0). Sizing on a no-edge base actively destroys value. H-302's separate σ-abstention test is essential before any joint H-025+σ variant. Run H-302 first; only if it shows σ-conditional Sharpe lift does the H-025+H-302 combination become a separate card. **Forbidden**: any framing that averages or stacks `p_offline` and `p_online` (round-015 contract).
 
@@ -120,16 +138,13 @@ Top of file = highest priority.
 - **Cost**: medium (notebook surgery + 1 retrain)
 
 ### H-005c [P3] (spawned by round 001) CSCV PBO deflation of the H-005 τ sweep
-- **Owner**: IMPLEMENTER + LITERATURE-SCOUT
-- **Asks**: ask 4 — overfitting check on the post-hoc τ grid
-- **Mechanism**: H-113 lands the CSCV / PBO machinery (combinatorially symmetric CV PBO per Bailey et al. 2014). Once H-113 ships, apply it to the round-001 τ_sweep_metrics.csv to compute the PBO of the best post-hoc τ. PBO < 0.5 means the τ=0.30 winner generalizes; PBO ≥ 0.5 means the post-hoc grid was overfit to test. This is the deflation step that justifies promoting round-001 numbers to a "headline" status.
-- **Status**: blocked on H-113. *Refinement (round-014/015)*: `cscv_pbo` landed in `src/backtest.py` (committed round-012, preserved through round-015 cleanup; architecture-agnostic). H-005c now collapses to "use the new helper to recompute the round-001 PBO", purely a regression check.
-- **Cost**: low (post-H-113)
+- **STATUS: blocked / SUPERSEDED**. Original framing depended on `simulate_inventory_aware_sized` outputs from rounds that have been REVOKED (see HEALTH_OF_RESULTS). Re-framed: any `wagie experiment run` with `bootstrap.scheme: cscv_pbo` (sibling RIGOR — assumed merged post this commit's wave) gets PBO out of the box. Standalone H-005c is no longer needed.
+- **Cost**: zero (CSCV is a built-in scheme via the spec).
 
 ### H-310-a [P5] Rolling-origin retraining harness (GENUINE GAP — Ask 3)
 - **Owner**: IMPLEMENTER + THEORIST
-- **Asks**: ask 3 — train-once → rolling-retrain to remove the static-model artefact in every PnL number to date.
-- **Mechanism**: today `artifacts/offline_model/model.cbm` is fit once on the 60% train slice and applied statically to val + test (round-001 / round-009 / Phase A all rest on this single fit). A production system retrains on a rolling cadence; without it every Sharpe number is an upper bound on a stale model. Engineering scope: refit-cadence config (proposal: `refit_cadence_bars = 2160` ≈ 30 days at M=20; configurable) and `refit_window` ∈ {`expanding`, `sliding`}; CONSTITUTION I.1 holds at every refit (data ≤ T only; no future leakage); the `selected_features.json` top-120 must be **re-derived per refit**, not frozen; ensemble of 3 seeds per refit (CONSTITUTION V); MLflow tag schema = one run per refit with `parent_run_id` linking to the rolling experiment. Artifact layout: `artifacts/offline_model/rolling/refit_NNNN/{model.cbm, model.{0..2}.cbm, selected_features.json, config_snapshot.json, metadata.json}` plus one consolidated `rolling/manifest.parquet` keyed by `(refit_id, t_start_ms, t_end_ms)` and the corresponding test-slice predictions parquet `rolling/predictions.parquet` so downstream rounds (H-310-b, H-005b extensions, Phase B refactor) can reuse without re-running. **Hard subtlety**: the conformal calibration window must roll with the model — `n_cal=9,446` of round-008 was the chronological val slice; under rolling retrain, the conformal layer's per-regime q is warmed at each refit from the previous fold's terminal q (not re-warmed from scratch), preserving the streaming contract while avoiding the per-refit cold start. Regime cuts on `parkinson_var_rolling_mean_24` are **fit on the very first refit's train+cal only and frozen** for all subsequent refits, to avoid drift in tercile boundaries leaking future state. A new module `src/rolling.py` exposes `RollingTrainer(config, schedule)` with a `.run() -> RollingArtifacts` method.
+- **Asks**: ask 3 — train-once -> rolling-retrain to remove the static-model artefact in every PnL number to date.
+- **Mechanism**: today `artifacts/offline_model/model.cbm` is fit once on the 60% train slice and applied statically to val + test. A production system retrains on a rolling cadence; without it every Sharpe number is an upper bound on a stale model. Engineering scope: refit-cadence config in `wagie.training` (proposal: `refit_cadence_bars = 2160` ≈ 30 days at M=20; configurable) and `refit_window` ∈ {`expanding`, `sliding`}; CONSTITUTION I.1 holds at every refit (data ≤ T only; no future leakage); the `selected_features.json` top-120 must be **re-derived per refit**, not frozen; ensemble of 3 seeds per refit; one run per refit with `parent_run_id` linking to the rolling experiment. Artifact layout: `artifacts/offline_model/rolling/refit_NNNN/{model.cbm, model.{0..2}.cbm, selected_features.json, config_snapshot.json, metadata.json}` plus one consolidated `rolling/manifest.parquet` keyed by `(refit_id, t_start_ms, t_end_ms)` and the corresponding test-slice predictions parquet `rolling/predictions.parquet` so downstream rounds (H-310-b, etc) can reuse without re-running. Regime cuts on `parkinson_var_rolling_mean_24` are **fit on the very first refit's train+cal only and frozen** for all subsequent refits, to avoid drift in tercile boundaries leaking future state. A new module `wagie.training.rolling` exposes `RollingTrainer(config, schedule)` with a `.run() -> RollingArtifacts` method. **Note (post-conformal-removal)**: the original "conformal calibration window must roll with the model" subtlety is gone — there is no Mondrian-ACI `q` to warm. The ARF state itself rolls forward unbroken (the streaming contract holds across refits as long as the offline `p_offline` input is from the latest refit).
 - **Predicted effect**: per-refit BSS Δ on the test slice ranges between +0.005 (small) and +0.02 (large) vs the static fit, with the gain concentrated in the high-vol tercile (where round-005 showed offline ECE 0.171 — most stale). Test Sharpe under rolling-retrain expected to shift by ≥ +0.05 with high variance across refits; confidence interval of the mean shift requires the per-metric bootstrap (H-320-a). Seed-noise band ≈ 0.003 BSS / 0.02 Sharpe (from Phase A's offline-only re-runs being bit-identical at the same seed).
 - **Falsification**: rolling-retrain test Sharpe is **NOT** statistically distinguishable from static-train test Sharpe (block-bootstrap p_boot ≥ 0.10 on the paired difference, using H-320-a's stationary block bootstrap with Politis-White block length). If the falsifier triggers, drop the rolling-retrain hypothesis: the model's stale-fit drag is below the noise floor on this dataset.
 - **References**: López de Prado, *AFML* (2018), local PDF `Downloads\Advances in Financial Machine Learning ... 2018 ... .pdf` Ch. 7 (purged CV / embargo) and Ch. 11 (backtesting). Sugiyama & Kawanabe, *Machine Learning in Non-Stationary Environments* (MIT 2012), local PDF `Downloads\(Adaptive Computation and Machine Learning series) ... 2012 .pdf` Ch. 1–3 (covariate-shift adaptation under refit). Hansen *Econometrics* (2022) Ch. 14 (rolling-origin evaluation).
@@ -139,14 +154,14 @@ Top of file = highest priority.
 
 ### H-310-b [P5] Rolling-retrain backtest measurement (GENUINE GAP — Ask 3, paired with H-310-a)
 - **Owner**: IMPLEMENTER + CRITIC
-- **Asks**: ask 3 — re-run round-009 (val-tau backtest) under rolling-retrain.
-- **Mechanism**: load `artifacts/offline_model/rolling/predictions.parquet` (built by H-310-a); re-run the round-015 unified harness (`scripts/phase_A_round_015.py` adapted) producing the 5 valid two-layer-architecture strategies (`baseline_offline_tau`, `baseline_online_tau`, `conformal_gate_tau`, `mondrian_aci_size`, `null_random_at_rate`) under rolling-retrain. Diff against the static-train numbers in `RESEARCH/diagrams/phase_A/round_015/phase_A_table.csv` row-by-row. Report per-strategy ΔSharpe, ΔBSS, Δper-regime-ECE, paired bootstrap p (H-320-a stationary block bootstrap on per-bar net log returns, block length via Politis-White). Multi-strategy DSR (Bailey-LdP) with `n_trials = 5 strategies × their respective grids = 85` deflation (matching round-015 exactly), applied to the rolling-retrain run as a self-contained Phase-A reproduction.
-- **Predicted effect**: ΔSharpe ∈ [-0.05, +0.20] for `baseline_offline_tau` vs static; ΔBSS ∈ [+0.005, +0.02]; the high-vol tercile's ΔECE expected to be the largest single gain. Round-015's null result (multi-strategy DSR=0 for all 5) might or might not flip — the falsifier specifies the threshold.
-- **Falsification**: at least one Phase-A strategy under rolling-retrain has multi-strategy DSR > 0.95 AND CSCV PBO < 0.5 → rolling retrain rescues tradable alpha. Otherwise the model has no edge regardless of refit cadence; the binding constraint is label/strategy/feature, not staleness. If even ΔBSS < +0.003 (below seed-noise band) on every strategy, the gap was an artefact of the loop's framing.
-- **References**: AFML Ch. 14 (deflated Sharpe under rolling). Politis & Romano (1994) JASA, *The Stationary Bootstrap* — for the paired CI on ΔSharpe (web URL `https://www.tandfonline.com/doi/abs/10.1080/01621459.1994.10476870` — INDEX gap; added by this round). Bailey & López de Prado (2014) deflated Sharpe — already cited.
+- **Asks**: ask 3 — re-run the baseline (val-tau backtest) under rolling-retrain.
+- **Mechanism**: load `artifacts/offline_model/rolling/predictions.parquet` (built by H-310-a); run a new YAML spec `experiments/baseline_with_offline_rolling.yaml` that points the engine at the rolling predictions. Three strategies under rolling-retrain: `threshold_gate(p_online)`, `threshold_gate(p_offline)`, `regime_gated`. Diff against the static-train numbers from `wagie experiment run experiments/baseline_with_offline.yaml` row-by-row (paired bootstrap p via sibling RIGOR's stationary-block-bootstrap on per-bar net log returns).
+- **Predicted effect**: ΔSharpe ∈ [-0.05, +0.20] for `threshold_gate(p_offline)` vs static; ΔBrier ∈ [-0.005, -0.001] (i.e. small Brier improvement). The high-vol tercile's ΔECE expected to be the largest single calibration gain.
+- **Falsification**: at least one rolling-retrain spec satisfies the accept gate (`predicted_effect_min` exceeded; `n_trades >= min_n_trades`) under bootstrap CI -> rolling retrain rescues edge. Otherwise the binding constraint is label/strategy/feature, not staleness.
+- **References**: AFML Ch. 14 (deflated Sharpe under rolling). Politis & Romano (1994) — paired CI on ΔSharpe.
 - **Status**: blocked on H-310-a. Once unblocked, this becomes the most consequential measurement round of the next quarter.
-- **Cost**: medium (~30 min wall once -a is done; Phase-A harness is fast).
-- **Dependencies**: H-310-a (predictions); H-320-a (paired block-bootstrap CI).
+- **Cost**: medium (~30 min wall once -a is done).
+- **Dependencies**: H-310-a (rolling predictions); sibling RIGOR (paired bootstrap CI).
 
 ### H-320-a [P5] Per-metric bootstrap CI library (GENUINE GAP — Ask 8)
 - **Owner**: IMPLEMENTER + LITERATURE-SCOUT
@@ -215,9 +230,20 @@ Top of file = highest priority.
 
 ---
 
-## Tier 1 — Streaming conformal coverage layer (asks 2 + 6, the project's differentiator)
+## Tier 1 — Streaming online layer (asks 2 + 6) [post-conformal-removal]
 
-The online stage is a streaming conformal layer providing conditional coverage. These rounds explicitly improve coverage validity and tightness, NOT raw ranking.
+> **TIER STATUS (2026-05-10)**: H-201..H-209 in this tier are SUPERSEDED. The
+> conformal layer they refined has been removed. Calibration of `p_online` is now
+> the single primary metric. H-201 (coverage diagnostic) and the ACCEPTED ACI cards
+> (H-202, H-203) are kept for historical traceability; the rest are archived.
+>
+> Replacement actionable cards live in Tier 7 / Ask 2 (drift surfacing,
+> `ThresholdGate(p_online)` calibration audits) and in the new spec catalog
+> (`experiments/sweep_alpha.yaml`, `experiments/replay_r031_low_vol_gate.yaml`).
+
+The online stage is a bagging-calibrated streaming layer with ADWIN drift
+surfacing. Cards below were originally framed as conformal-layer refinements
+and are SUPERSEDED unless explicitly noted otherwise.
 
 ### H-201 [P5] Baseline coverage diagnostic on the existing online ARF
 - **Owner**: IMPLEMENTER + THEORIST
@@ -227,20 +253,7 @@ The online stage is a streaming conformal layer providing conditional coverage. 
 - **Cost**: low (no model changes; just measurement)
 
 ### H-201b [P4] (spawned by round 002) Finer regime binning to expose what Mondrian-LAC misses at α=0.20
-- **Owner**: IMPLEMENTER
-- **Asks**: ask 2 (online coverage)
-- **Mechanism**: round 002 used 3-bucket parkinson_var terciles. The persistent low-vol gap at α=0.20 (-7.9pp over-coverage) suggests the low-vol bucket contains a sub-mode that Mondrian-LAC's single q_hat for the whole tercile cannot adapt to. Re-run `scripts/round_002_coverage_baseline.py` with `N_TERCILES=5` (quintiles) and check whether the low-quintile gap at α=0.20 shrinks below ±5pp. If it does, the ARF coverage gap is fundamentally a *resolution* problem (more buckets fix it); if it doesn't, the gap is a probability-quality problem (Mondrian can't fix it; needs ACI / locally-weighted conformal — H-202..H-205).
-- **Falsification**: low-quintile gap at α=0.20 stays > 5pp under quintile binning → resolution alone won't help; H-202 work justified.
-- **Status**: queued
-- **Cost**: low (script tweak + rerun)
-
-### H-201c [P3] (spawned by round 002) Sensitivity of coverage gap to calibration-fraction
-- **Owner**: IMPLEMENTER
-- **Asks**: ask 2 + ask 4 (rigorous evaluation)
-- **Mechanism**: round 002 used a fixed 30/70 chronological cal/eval split. Sweep `CAL_FRAC ∈ {0.20, 0.30, 0.40, 0.50}` and report how max |gap| (Mondrian, α=0.10) and max |gap| (Mondrian, α=0.20) vary. If the gap is monotone-decreasing in cal_frac, the round-002 gap was an n_cal-power problem; if invariant, it's a real conditional-miscalibration signal.
-- **Falsification**: gap collapses to within ±0.5pp at cal_frac=0.50 → the round-002 finding is an n_cal-power artifact, not a real gap.
-- **Status**: queued
-- **Cost**: low (script-level loop + 4× rerun)
+- **STATUS: SUPERSEDED** (post-conformal-removal). The script this card targeted (`scripts/round_002_coverage_baseline.py`) is gone, and the Mondrian-ACI/LAC layer it would refine has been removed. Replacement: a per-regime calibration audit on the wagie ARF output, expressed as a research round on `experiments/baseline.yaml` outputs (no separate spec needed; `metrics.json` already breaks down by regime).
 
 ### H-202 [P5] Adaptive Conformal Inference (Gibbs & Candès 2021)
 - **Owner**: LITERATURE-SCOUT + IMPLEMENTER + CRITIC
@@ -254,39 +267,28 @@ The online stage is a streaming conformal layer providing conditional coverage. 
 - **Status**: ACCEPTED round-008 — `aci_mondrian_step` + `aci_mondrian_stream` in `src/conformal.py`. 9/9 Mondrian-ACI tests pass (incl. bit-exact reduction to plain ACI under single regime). On real stream: per-regime gap collapses from plain ACI's ±5–10pp to **≤ 0.6pp on every regime / α / predictor combination**. **Beats round-002 batch Mondrian-LAC** (LAC was ≤ 3.4pp at α=0.10 / -7.9pp on low-vol p_online at α=0.20; Mondrian-ACI is ≤ 0.21pp / -0.54pp). The α=0.20 low-vol gap that round-002 LEDGER explicitly named as "the gap H-202..H-208 must close" is now **closed to 0.04pp**. Marginal coverage stays on target.
 - **Cost**: medium
 
-### H-204 [P4] River ARF vs SRP vs HAT under coverage-as-metric
-- **Mechanism**: paired prequential test of `ARFClassifier`, `SRPClassifier`, `HoeffdingAdaptiveTreeClassifier`. Primary metric: marginal + per-regime coverage at α=0.1, plus set tightness. Secondary: Brier.
-- **Status**: queued
-- **Cost**: medium
+### H-204 [P4] River ARF vs SRP vs HAT (refit as a calibration audit, not a coverage audit)
+- **Status: actionable (REFRAMED)**. Original framing was conformal-coverage; under the post-conformal-removal architecture the comparison reduces to: which streaming learner gives the best per-regime Brier on `p_online` at fixed compute budget? Falsifier becomes "ARF Brier - HAT Brier > seed-noise band". The round-024 result (ARF dominates HAT on Brier and ECE; HAT 2.8x faster) under the legacy harness is keepable in principle. Re-run via a new YAML spec that selects the streaming kind (default ARF; HAT if `wagie.model.streaming_kind: hat` — sibling STREAMING owns this knob).
+- **Cost**: medium (when a `streaming_kind` knob exists).
 
 ### H-205 [P4] Locally-weighted conformal (kernel-local validity)
-- **Mechanism**: at test point x, weight calibration scores by kernel similarity to x. Provides conditional-coverage-by-feature-similarity. Reference: Manokhin Ch. 9.
-- **Status**: queued
-- **Cost**: medium
+- **Status: SUPERSEDED** (no conformal layer to weight).
 
 ### H-206 [P4] CatBoost virtual-ensemble σ_epistemic as a conformal feature
-- **Mechanism**: add `sigma_epistemic` from `src/uncertainty.py` to the conformal layer's score function. Tests whether epistemic uncertainty improves coverage tightness.
-- **Status**: queued; subsumes the prior H-010.
-- **Cost**: medium
+- **Status: SUPERSEDED** as written (depends on the conformal layer). Reframed as H-302 (σ-epistemic *abstention*) and H-209 (Cantelli sized entries) below; both gate decisions, not conformal sets. The σ_epistemic feature itself remains useful — see those replacement cards.
 
 ### H-207 [P3] ADWIN drift detector triggers ACI threshold reset
-- **Mechanism**: feed prediction errors into ADWIN; on detected drift, soft-reset `q_t` toward the prior. Hardens ACI against regime breaks.
-- **Status**: queued
-- **Cost**: low
+- **Status: SUPERSEDED**. ARF already wraps ADWIN per-tree; sibling STREAMING surfaces the top-level ADWIN signal on the LAC score `s_t = 1 - p_online(y_t | x_t)` and emits a `DRIFT` event in `metrics.json`. There is no `q_t` to reset; the drift signal goes to logging + human review (no auto-retrain in v1).
 
 ---
 
 ## Tier 2 — Conformal coverage applied to backtest decisions (ask 4)
 
 ### H-011 [P5] Conformal LAC + Mondrian for trade abstention (offline)
-- **Mechanism**: use the *batch* split-conformal in `src/conformal.py` (already ported) to gate trade entries — abstain when prediction set is full {0,1}. Combined with H-005's backtest harness for an abstention-aware Sharpe.
-- **Status**: queued (depends on H-005)
-- **Cost**: medium
+- **Status: SUPERSEDED**. The conformal layer is gone; abstention is now controlled by `ThresholdGate(p_online >= tau)` and (optionally) `RegimeGated`. See `experiments/sweep_alpha.yaml` for the τ sweep that replaces this card's accept question.
 
 ### H-208 [P4] Streaming conformal trade gate (online ACI variant)
-- **Mechanism**: same as H-011 but using the online ACI threshold from H-202; coverage adapts as the stream evolves.
-- **Status**: blocked on H-011 + H-202.
-- **Cost**: medium
+- **Status: SUPERSEDED**. Replaced by `ThresholdGate(p_online >= tau)` + sibling RIGOR's accept-gate. The "trade gate" responsibility lives in the strategy registry, not the (removed) conformal layer.
 
 ### H-302 [P4] σ_epistemic-conditioned trade abstention (Ask 2 — distinct from H-025)
 - **Owner**: IMPLEMENTER + THEORIST
@@ -642,7 +644,7 @@ contract; round-010..013 KILL_LIST history.
 - **Predicted effect**: at val-chosen `k*` ≠ 0, ΔSharpe +0.05 to +0.20 vs binary `baseline_offline_tau` if σ is informative; multi-strategy DSR > 0.95 only if k\* ≠ 0 and lift survives `(τ × k)` deflation. Seed-noise ≈ 0.02 Sharpe.
 - **Falsification**: `k* = 0` wins the val grid (no σ-dependence) OR ΔSharpe at val-chosen `k*` ≤ +0.05 → sizing is a tax on a non-edge; kill.
 - **References**: Cantelli's inequality (textbook, Wainwright High-Dim Stats Ch. 1 — local Desktop). Malinin, Prokhorenkova, Ustimenko (2021) ICLR arXiv 2006.10562 (INDEX). Angelopoulos & Bates (2021) "A Gentle Introduction to Conformal Prediction" arXiv 2107.07511 (web; INDEX add). `src/uncertainty.py::cantelli_decision_rule` already implemented.
-- **Status**: queued (P4). Distinct from H-302 (σ-abstention) and H-25 (Mondrian-ACI margin sizing) — three orthogonal axes.
+- **Status: actionable** (P4). Distinct from H-302 (σ-abstention). H-25's "Mondrian-ACI margin sizing" axis is SUPERSEDED (no Mondrian-ACI). Sizing axis under the new architecture: `EvCalibratedSize(k * margin)` using bagging-derived `p_online` directly OR the Cantelli p_lower margin via H-209.
 - **Cost**: medium (~2 hours; no retrain — uses persisted offline model).
 - **Dependencies**: H-108 (CatBoostEnsemble — accepted round-003); H-190 (block-bootstrap CI on Sharpe lift).
 
@@ -758,9 +760,9 @@ contract; round-010..013 KILL_LIST history.
 #### H-180 [P4] Per-trade attribution dataframe (NEW; substrate for Ask 7)
 - **Owner**: IMPLEMENTER
 - **Asks**: ask 7
-- **Mechanism**: extend `simulate_inventory_aware` (or wrap it) to emit a per-trade `parquet` with columns: `entry_bar`, `exit_bar`, `entry_p_offline`, `entry_p_online`, `entry_sigma_epistemic`, `entry_q_t`, `entry_regime`, `realized_pnl_bp`, `bars_held`, `exit_reason ∈ {profit_barrier, stop_barrier, timeout}`, `cost_paid_bp`. Substrate for everything else in Ask 7. The H-306 spawning rule (round-014) ingests this output.
+- **Mechanism**: extend the wagie `SimBroker` / `Portfolio` to emit a per-trade `parquet` (`artifacts/runs/<run_id>/per_trade.parquet`) with columns: `entry_bar`, `exit_bar`, `entry_p_offline`, `entry_p_online`, `entry_sigma_epistemic`, `entry_regime`, `realized_pnl_bp`, `bars_held`, `exit_reason ∈ {profit_barrier, stop_barrier, timeout}`, `cost_paid_bp`. Substrate for everything else in Ask 7. The H-306 spawning rule (round-014) ingests this output. `entry_q_t` is no longer applicable (no Mondrian-ACI layer); the column is dropped.
 - **Predicted effect**: zero (data-emission round; the value is the substrate).
-- **Falsification**: trivial; accepts on schema correctness + smoke test (every column populated, finite, `exit_reason` ∈ valid set, n_trades matches `simulate_inventory_aware` aggregate count).
+- **Falsification**: trivial; accepts on schema correctness + smoke test (every column populated, finite, `exit_reason` ∈ valid set, n_trades matches `metrics.json::trading.n_trades`).
 - **References**: AFML Ch. 14 (backtest statistics — local PDF); existing `Trade` dataclass in `src/backtest.py`.
 - **Status**: queued (P4).
 - **Cost**: low (~1 hour engineering).

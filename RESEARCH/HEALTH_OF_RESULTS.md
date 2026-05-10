@@ -69,12 +69,40 @@ read as `[accept-under-leakage]` until they are replayed under wagie.
 In priority order:
 
 1. **R-031 low-vol gate** — replay first because the +20.86 number is the
-   most consequential; expectation is collapse to near zero.
-2. **R-030 H-182 conditional Sharpe** — same.
+   most consequential; expectation is collapse to near zero. Spec:
+   `experiments/replay_r031_low_vol_gate.yaml` (`regime_gated` strategy;
+   `hypothesis_id: R-031-replay`; `predicted_effect_min: 0.5` ann-Sharpe;
+   `min_n_trades: 200`).
+2. **R-030 H-182 conditional Sharpe** — same. Spec TBD; depends on TRADING
+   sibling shipping per-regime backtest reporting.
 3. **R-018 H-209 Cantelli** — needs the σ_epistemic feature plumbing (deferred
    to a later wagie phase).
 4. **R-025 H-170 online stacking** — multi-base-learner comparison; relevant
    for future research direction.
+
+## What's been replayed (under the wagie harness)
+
+**The empty set.** As of 2026-05-10 (post-conformal-removal wave), no round has
+been replayed under the wagie harness end-to-end with the accept-gate format
+(`hypothesis_id` + `predicted_effect_min` + `min_n_trades` + bootstrap-CI on
+the headline metric).
+
+| round | spec | run_id | accept-gate verdict | wagie commit |
+|---|---|---|---|---|
+| R-031 | `experiments/replay_r031_low_vol_gate.yaml` | (not run) | (pending) | (pending) |
+| R-030 | (spec TBD) | (not run) | (pending) | (pending) |
+| R-018 | (spec TBD; needs σ feature) | (blocked) | n/a | n/a |
+| R-025 | (spec TBD; needs streaming-stacker) | (blocked) | n/a | n/a |
+
+**Until the first row of this table fills with a real `run_id` and verdict, the
+revocation list above stands and no economic claim from rounds 015..031 may be
+quoted as accepted.**
+
+The promised `RESEARCH/diagrams/wagie_round_017_replay/BEFORE_vs_AFTER.csv`
+artefact also does not exist; the round-017 replay roadmap was a plan, not
+output. When R-031 (or any earlier-priority replay) does run, this file should
+be updated with the result, the run_id, and a link to the artefact directory
+under `artifacts/runs/`.
 
 ## Wagie F0 contract tests in CI
 

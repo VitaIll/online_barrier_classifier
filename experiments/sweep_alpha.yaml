@@ -1,0 +1,128 @@
+# Tau sweep — five specs in one file.
+#
+# Post-conformal-removal, `wagie.strategy.tau` is the gating knob (replaces the
+# legacy `aci.alphas`). Spec runners that support multi-doc YAML (or sibling
+# RIGOR's sweep harness) consume each `---`-separated document as one
+# ExperimentSpec; otherwise copy-paste each block into its own file.
+#
+# The `name` field is required-unique per run so artifacts don't collide.
+
+name: sweep_alpha_tau_010
+description: "tau sweep — tau=0.10 (most liberal gate; high trade rate, low precision)"
+seed: 42
+hypothesis_id: SWEEP-tau-010
+predicted_effect_min: 0.0     # this is exploratory; the sweep is the deliverable
+min_n_trades: 50
+wagie:
+  data:
+    parquet_path: data/processed/btcusdt_1m.parquet
+    m_minutes: 20
+  model:
+    catboost_path: null
+    arf: {n_models: 10, lambda_value: 6.0, seed: 42}
+  strategy:
+    kind: threshold_gate          # sibling TRADING ships this kind
+    layer: p_online
+    tau: 0.10
+  broker: {inventory_cap: 5}
+  runtime: {warmup_samples: 96}
+features:
+  catalog: default
+  regime_feature: parkinson_var_rolling_mean_24
+  regime_edges: [1.0e-6, 1.0e-5]
+  regime_labels: [low, med, high]
+charts: {enable: true, n_calibration_bins: 10}
+report: {enable: true, title: "sweep_alpha — tau=0.10"}
+artifacts: {out_dir: artifacts/runs, save_state: true, save_predictions: true}
+
+---
+
+name: sweep_alpha_tau_030
+description: "tau sweep — tau=0.30"
+seed: 42
+hypothesis_id: SWEEP-tau-030
+predicted_effect_min: 0.0
+min_n_trades: 50
+wagie:
+  data: {parquet_path: data/processed/btcusdt_1m.parquet, m_minutes: 20}
+  model: {catboost_path: null, arf: {n_models: 10, lambda_value: 6.0, seed: 42}}
+  strategy: {kind: threshold_gate, layer: p_online, tau: 0.30}
+  broker: {inventory_cap: 5}
+  runtime: {warmup_samples: 96}
+features:
+  catalog: default
+  regime_feature: parkinson_var_rolling_mean_24
+  regime_edges: [1.0e-6, 1.0e-5]
+  regime_labels: [low, med, high]
+charts: {enable: true, n_calibration_bins: 10}
+report: {enable: true, title: "sweep_alpha — tau=0.30"}
+artifacts: {out_dir: artifacts/runs, save_state: true, save_predictions: true}
+
+---
+
+name: sweep_alpha_tau_050
+description: "tau sweep — tau=0.50 (matches base rate region)"
+seed: 42
+hypothesis_id: SWEEP-tau-050
+predicted_effect_min: 0.0
+min_n_trades: 50
+wagie:
+  data: {parquet_path: data/processed/btcusdt_1m.parquet, m_minutes: 20}
+  model: {catboost_path: null, arf: {n_models: 10, lambda_value: 6.0, seed: 42}}
+  strategy: {kind: threshold_gate, layer: p_online, tau: 0.50}
+  broker: {inventory_cap: 5}
+  runtime: {warmup_samples: 96}
+features:
+  catalog: default
+  regime_feature: parkinson_var_rolling_mean_24
+  regime_edges: [1.0e-6, 1.0e-5]
+  regime_labels: [low, med, high]
+charts: {enable: true, n_calibration_bins: 10}
+report: {enable: true, title: "sweep_alpha — tau=0.50"}
+artifacts: {out_dir: artifacts/runs, save_state: true, save_predictions: true}
+
+---
+
+name: sweep_alpha_tau_070
+description: "tau sweep — tau=0.70 (tight gate; few trades, high precision target)"
+seed: 42
+hypothesis_id: SWEEP-tau-070
+predicted_effect_min: 0.0
+min_n_trades: 50
+wagie:
+  data: {parquet_path: data/processed/btcusdt_1m.parquet, m_minutes: 20}
+  model: {catboost_path: null, arf: {n_models: 10, lambda_value: 6.0, seed: 42}}
+  strategy: {kind: threshold_gate, layer: p_online, tau: 0.70}
+  broker: {inventory_cap: 5}
+  runtime: {warmup_samples: 96}
+features:
+  catalog: default
+  regime_feature: parkinson_var_rolling_mean_24
+  regime_edges: [1.0e-6, 1.0e-5]
+  regime_labels: [low, med, high]
+charts: {enable: true, n_calibration_bins: 10}
+report: {enable: true, title: "sweep_alpha — tau=0.70"}
+artifacts: {out_dir: artifacts/runs, save_state: true, save_predictions: true}
+
+---
+
+name: sweep_alpha_tau_090
+description: "tau sweep — tau=0.90 (deep tail; expected: very few trades)"
+seed: 42
+hypothesis_id: SWEEP-tau-090
+predicted_effect_min: 0.0
+min_n_trades: 10           # at tau=0.90 we expect tens of trades, not hundreds
+wagie:
+  data: {parquet_path: data/processed/btcusdt_1m.parquet, m_minutes: 20}
+  model: {catboost_path: null, arf: {n_models: 10, lambda_value: 6.0, seed: 42}}
+  strategy: {kind: threshold_gate, layer: p_online, tau: 0.90}
+  broker: {inventory_cap: 5}
+  runtime: {warmup_samples: 96}
+features:
+  catalog: default
+  regime_feature: parkinson_var_rolling_mean_24
+  regime_edges: [1.0e-6, 1.0e-5]
+  regime_labels: [low, med, high]
+charts: {enable: true, n_calibration_bins: 10}
+report: {enable: true, title: "sweep_alpha — tau=0.90"}
+artifacts: {out_dir: artifacts/runs, save_state: true, save_predictions: true}

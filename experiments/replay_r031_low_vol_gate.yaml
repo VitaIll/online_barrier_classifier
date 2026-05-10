@@ -1,0 +1,67 @@
+name: replay_r031_low_vol_gate
+description: |
+  Highest-priority replay per RESEARCH/HEALTH_OF_RESULTS.md.
+  Replays round-031's low-vol-gated baseline_offline_tau under the wagie harness
+  with honest execution timing (no 19-minute look-ahead). Expectation: the legacy
+  +20.86 ann-Sharpe collapses to near zero or negative; if it survives the
+  bootstrap-CI accept gate (predicted_effect_min=+0.5 ann-Sharpe with
+  min_n_trades=200), the low-vol-gate signal is real after all.
+seed: 42
+
+# Accept-gate fields (sibling RIGOR — assumed merged post this commit's wave).
+hypothesis_id: R-031-replay
+predicted_effect_min: 0.5     # ann-Sharpe lift over the ungated ThresholdGate baseline
+min_n_trades: 200
+bootstrap:
+  scheme: stationary_block
+  n_resamples: 5000
+  block_length: auto          # Politis-White plug-in
+
+wagie:
+  data:
+    parquet_path: data/processed/btcusdt_1m.parquet
+    m_minutes: 20
+  model:
+    catboost_path: artifacts/offline_model/model.cbm
+    selected_features_path: artifacts/offline_model/selected_features.json
+    arf:
+      n_models: 10
+      lambda_value: 6.0
+      seed: 42
+  strategy:
+    # Sibling TRADING — assumed merged post this commit's wave.
+    kind: regime_gated
+    tau: 0.20
+    layer: p_offline           # round-031's gated variable was baseline_offline_tau
+    extra:
+      regime_signal: parkinson_var_rolling_mean_24
+      keep_regimes: [low]      # train-only tercile membership; "low" only
+  broker:
+    inventory_cap: 5
+    take_profit_log: 0.0041113
+    stop_loss_log: 1.0e9       # c_stop=inf (round-031 used no-stop variant)
+    cost_bps: 1.0
+    execution_latency_minutes: 1
+    expiry_minutes: 20
+  runtime:
+    warmup_samples: 96
+
+features:
+  catalog: default
+  n_features: null
+  regime_feature: parkinson_var_rolling_mean_24
+  regime_edges: [2.86e-6, 7.50e-6]   # train-only terciles from round-031
+  regime_labels: [low, med, high]
+
+charts:
+  enable: true
+  n_calibration_bins: 10
+
+report:
+  enable: true
+  title: "R-031 replay — low-vol gated ThresholdGate (regime-gated)"
+
+artifacts:
+  out_dir: artifacts/runs
+  save_state: true
+  save_predictions: true
