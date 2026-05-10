@@ -1,12 +1,14 @@
-"""Contract tests for `wagie.metrics.MetricsBattery` + `MetricsReport`.
+"""Contract tests for ``wagie.metrics.MetricsBattery`` + ``MetricsReport``.
 
 Covers:
   - compute() populates trading from result.ledger.fills always.
   - Calibration metrics computed only when y_true + p_pred provided.
-  - Coverage computed only when in_set_by_alpha provided.
   - Defaults (Brier=0, ECE=0, ROC=0.5, PR=0) when optional inputs missing.
   - Empty-fill EngineResult yields defaults across the report.
+  - The engine's streaming p_online_history / label_history feed compute()
+    automatically — assert non-zero Brier on a fixture with that history.
   - to_dict() and to_json() round-trip cleanly.
+  - Per-regime stratification when regime_ids supplied (or routed via engine).
 """
 
 from __future__ import annotations
@@ -49,7 +51,14 @@ def _fill(pnl: float, *, reason: ExitReason = ExitReason.TP, order_id: int = 0) 
     )
 
 
-def _make_result(fills: list[BarrierTouched], n_decisions: int = 10) -> EngineResult:
+def _make_result(
+    fills: list[BarrierTouched],
+    n_decisions: int = 10,
+    *,
+    p_online_history: list[float] | None = None,
+    label_history: list[int] | None = None,
+    regime_history: list[int] | None = None,
+) -> EngineResult:
     """Minimal EngineResult stub. We only need ledger.fills and a few counters."""
     ledger = BrokerLedger(fills=fills, n_open_at_finalize=0, config={})
     return EngineResult(
@@ -61,6 +70,9 @@ def _make_result(fills: list[BarrierTouched], n_decisions: int = 10) -> EngineRe
         n_actions_rejected=0,
         pipeline_state_hash=b"\x00" * 32,
         final_portfolio=Portfolio(),
+        p_online_history=p_online_history or [],
+        label_history=label_history or [],
+        regime_history=regime_history or [],
     )
 
 
@@ -72,8 +84,8 @@ def test_metrics_report_defaults() -> None:
     assert r.brier == 0.0
     assert r.ece == 0.0
     assert r.reliability == []
+    assert r.calibration_by_regime == []
     assert r.trading == {}
-    assert r.coverage == []
     assert r.roc_auc == 0.5
     assert r.pr_auc == 0.0
     assert r.n_decisions == 0
@@ -93,8 +105,6 @@ def test_battery_with_empty_fills_yields_defaults_for_optional() -> None:
     assert rep.reliability == []
     assert rep.roc_auc == 0.5
     assert rep.pr_auc == 0.0
-    # No in_set → coverage list empty.
-    assert rep.coverage == []
 
 
 # ---------- trading populated from fills -----------------------------------
@@ -158,42 +168,62 @@ def test_calibration_populated_when_both_provided() -> None:
     assert 0.0 <= rep.pr_auc <= 1.0
 
 
-# ---------- coverage only when in_set_by_alpha + y_true provided -----------
+# ---------- engine streaming history routes through automatically ----------
 
 
-def test_coverage_skipped_without_in_set() -> None:
-    res = _make_result(fills=[_fill(0.01)])
-    rep = MetricsBattery().compute(res, y_true=[1, 0], p_pred=[0.7, 0.3])
-    assert rep.coverage == []
-
-
-def test_coverage_skipped_without_y_true() -> None:
-    """Per implementation, coverage requires both in_set_by_alpha AND y_true."""
-    res = _make_result(fills=[_fill(0.01)])
-    rep = MetricsBattery().compute(
-        res, in_set_by_alpha={0.1: [1, 1, 1]},
+def test_calibration_routes_engine_history_when_no_explicit_inputs() -> None:
+    """The engine populates p_online_history / label_history; MetricsBattery
+    should pick them up without the caller explicitly threading them."""
+    rng = np.random.default_rng(1)
+    n = 200
+    p = rng.uniform(0.05, 0.95, n).tolist()
+    y = [int(rng.uniform() < pi) for pi in p]
+    res = _make_result(
+        fills=[],
+        p_online_history=p,
+        label_history=y,
     )
-    assert rep.coverage == []
+    rep = MetricsBattery().compute(res)
+    assert rep.brier > 0.0, "engine history should drive non-zero Brier"
+    assert rep.ece >= 0.0
 
 
-def test_coverage_populated_with_both() -> None:
-    res = _make_result(fills=[_fill(0.01)])
-    y = [1, 1, 0, 0, 1]
-    in_sets = {
-        0.1: [1, 1, 0, 0, 1],
-        0.2: [1, 0, 0, 0, 1],
-    }
+def test_calibration_per_regime_stratification() -> None:
+    """When regime_ids align with y_true / p_pred, calibration_by_regime
+    contains one entry per regime with sufficient samples."""
+    rng = np.random.default_rng(2)
+    n = 300
+    p = rng.uniform(0.05, 0.95, n)
+    y = (rng.uniform(0.0, 1.0, n) < p).astype(int).tolist()
+    regimes = (rng.integers(0, 3, n)).tolist()
+    res = _make_result(fills=[])
     rep = MetricsBattery().compute(
-        res, y_true=y, p_pred=[0.6, 0.5, 0.4, 0.3, 0.7],
-        in_set_by_alpha=in_sets,
+        res, y_true=y, p_pred=p.tolist(), regime_ids=regimes,
     )
-    assert len(rep.coverage) == 2
-    alphas = {c["alpha"] for c in rep.coverage}
-    assert alphas == {0.1, 0.2}
-    for entry in rep.coverage:
-        assert set(entry.keys()) == {"alpha", "empirical", "target", "gap", "n"}
-        assert entry["target"] == pytest.approx(1.0 - entry["alpha"])
-        assert entry["gap"] == pytest.approx(entry["empirical"] - entry["target"])
+    assert len(rep.calibration_by_regime) >= 2
+    rids = {entry["regime_id"] for entry in rep.calibration_by_regime}
+    assert rids.issubset({0, 1, 2})
+    for entry in rep.calibration_by_regime:
+        assert entry["n"] >= 2
+        assert 0.0 <= entry["brier"] <= 1.0
+        assert 0.0 <= entry["ece"] <= 1.0
+
+
+def test_calibration_per_regime_via_engine_history() -> None:
+    """regime_history on the result also feeds per-regime stratification."""
+    rng = np.random.default_rng(3)
+    n = 200
+    p = rng.uniform(0.05, 0.95, n).tolist()
+    y = [int(rng.uniform() < pi) for pi in p]
+    regimes = rng.integers(0, 2, n).tolist()
+    res = _make_result(
+        fills=[],
+        p_online_history=p,
+        label_history=y,
+        regime_history=regimes,
+    )
+    rep = MetricsBattery().compute(res)
+    assert len(rep.calibration_by_regime) >= 1
 
 
 # ---------- provenance / hash ----------------------------------------------
@@ -224,7 +254,7 @@ def test_to_dict_contains_all_top_level_keys() -> None:
     rep = MetricsReport()
     d = rep.to_dict()
     expected_keys = {
-        "brier", "ece", "reliability", "trading", "coverage",
+        "brier", "ece", "reliability", "calibration_by_regime", "trading",
         "roc_auc", "pr_auc",
         "n_decisions", "n_filled", "n_actions_approved", "n_actions_rejected",
         "pipeline_state_hash",
@@ -238,14 +268,12 @@ def test_to_json_round_trip() -> None:
         res,
         y_true=[1, 0, 1, 0],
         p_pred=[0.7, 0.3, 0.8, 0.2],
-        in_set_by_alpha={0.1: [1, 0, 1, 0]},
     )
     s = rep.to_json()
     parsed = json.loads(s)
     assert parsed["trading"]["n_trades"] == 2
     assert parsed["brier"] == pytest.approx(rep.brier)
     assert parsed["ece"] == pytest.approx(rep.ece)
-    assert len(parsed["coverage"]) == 1
     # Ensure indent kwarg is honored (default = 2 → multiline).
     assert "\n" in s
 

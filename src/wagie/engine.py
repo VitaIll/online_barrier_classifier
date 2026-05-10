@@ -5,6 +5,7 @@ Per-tick ordering:
     2. Clock.set_time_ns(t)
     3. Process operator console commands (if any pending)
     4. LabelBuffer.maybe_emit(bar) → if a label matured, drive learn_one
+       and record (p_online, label, regime_id) for offline calibration metrics.
     5. Broker.advance_to(t, bar) → walks first-touch, emits position events
     6. obs = Pipeline.transform_one(bar, ctx)  ← AFTER step 4 (no leakage)
     7. for each Action in obs.actions:
@@ -53,6 +54,12 @@ class EngineResult:
     final_portfolio: Portfolio
     audit: list[dict] = field(default_factory=list)
     events: list[Event] = field(default_factory=list)
+    # Streaming calibration trace: parallel arrays of (p_online, label, regime_id)
+    # captured each time the LabelBuffer emits a matured prediction-label pair.
+    # These feed MetricsBattery (Brier / ECE / per-regime calibration).
+    p_online_history: list[float] = field(default_factory=list)
+    label_history: list[int] = field(default_factory=list)
+    regime_history: list[int] = field(default_factory=list)
 
     @property
     def fills(self) -> list[BarrierTouched]:
@@ -97,6 +104,10 @@ class Engine:
         self._audit: list[dict] = []
         self._events: list[Event] = []
         self._n_seen = 0
+        # Streaming calibration trace, populated when matured labels arrive.
+        self._p_online_history: list[float] = []
+        self._label_history: list[int] = []
+        self._regime_history: list[int] = []
 
     def run(self) -> EngineResult:
         try:
@@ -123,6 +134,9 @@ class Engine:
             else Portfolio(),
             audit=self._audit,
             events=self._events,
+            p_online_history=list(self._p_online_history),
+            label_history=list(self._label_history),
+            regime_history=list(self._regime_history),
         )
 
     def _drain_console_commands(self) -> None:
@@ -150,6 +164,16 @@ class Engine:
             if emitted is not None:
                 obs_prev, y_prev = emitted
                 self.pipeline.learn_one(obs_prev, y_prev)
+                # Capture (p_online, label, regime) for calibration metrics.
+                p_prev = obs_prev.p_online
+                if p_prev is not None:
+                    try:
+                        self._p_online_history.append(float(p_prev))
+                        self._label_history.append(int(y_prev))
+                        r = obs_prev.regime_id
+                        self._regime_history.append(int(r) if r is not None else -1)
+                    except (TypeError, ValueError):
+                        pass
 
         # 5. Broker resolves any open positions; emits position events
         fills = self.broker.advance_to(ts, bar)

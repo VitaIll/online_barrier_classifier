@@ -55,7 +55,7 @@ class ArtifactsSpec(BaseModel):
 
 class CVSpec(BaseModel):
     """Cross-validation knobs. When present, the protocol runs CV instead of
-    a single backtest. CV folds use `wagie.cv.cross_validation`."""
+    a single backtest. CV folds use ``wagie.cv.cross_validation``."""
 
     enabled: bool = True
     n_folds: int = 10
@@ -69,13 +69,14 @@ class CVSpec(BaseModel):
 class TrainingSpec(BaseModel):
     """Training-side knobs the protocol applies before the engine runs.
 
-    Currently: warm the streaming Mondrian-ACI quantiles from a held-out
-    train slice. Offline CatBoost training is out-of-band — point
-    `wagie.model.catboost_path` at a pre-trained .cbm.
+    Offline CatBoost training is out-of-band — point
+    ``wagie.model.catboost_path`` at a pre-trained .cbm. This sub-spec is
+    intentionally near-empty after the Mondrian-ACI removal: the streaming
+    ARF needs no warm-up.
     """
 
-    warm_calibrator_quantiles: bool = False
-    warm_train_frac: float = 0.6
+    # Reserved for future hooks (e.g. selected_features warm-up). Kept as a
+    # stable empty shape so existing YAMLs remain valid.
 
     model_config = ConfigDict(extra="forbid")
 
@@ -112,6 +113,21 @@ class ExperimentSpec(BaseModel):
             raw = yaml.safe_load(f) or {}
         if "wagie" not in raw:
             raise ValueError(f"spec {path}: missing required `wagie:` block")
+        # Quietly drop any legacy `aci` block from old YAMLs.
+        wagie = raw.get("wagie", {})
+        model = wagie.get("model") if isinstance(wagie, dict) else None
+        if isinstance(model, dict):
+            model.pop("aci", None)
+        # Drop legacy strategy.alpha / .layer if present.
+        strategy = wagie.get("strategy") if isinstance(wagie, dict) else None
+        if isinstance(strategy, dict):
+            strategy.pop("alpha", None)
+            strategy.pop("layer", None)
+        # Drop legacy training.warm_calibrator_quantiles / warm_train_frac.
+        training = raw.get("training")
+        if isinstance(training, dict):
+            training.pop("warm_calibrator_quantiles", None)
+            training.pop("warm_train_frac", None)
         return cls.model_validate(raw)
 
     def to_yaml(self) -> str:

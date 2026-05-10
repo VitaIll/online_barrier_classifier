@@ -12,11 +12,10 @@ from wagie.io.brokers import SimBroker
 from wagie.persistence import Manifest, load, save
 from wagie.pipeline import (
     LabelBuffer,
-    MondrianACICalibrator,
     OnlineARFCorrector,
     Pipeline,
 )
-from wagie.strategy import PureConformalGate
+from wagie.strategy import ThresholdGate
 
 
 def _build_pipeline_and_broker():
@@ -29,10 +28,9 @@ def _build_pipeline_and_broker():
     )
     rg = RegimeFeature(cuts)
     arf = OnlineARFCorrector()
-    aci = MondrianACICalibrator()
     lb = LabelBuffer()
-    strat = PureConformalGate(name="pcg", alpha=0.10)
-    pipeline = Pipeline([base_bar, fb, rg, arf, aci, lb, strat])
+    strat = ThresholdGate(name="pcg", tau=0.20)
+    pipeline = Pipeline([base_bar, fb, rg, arf, lb, strat])
     broker = SimBroker(m_minutes=20, inventory_cap=5)
     return pipeline, broker
 

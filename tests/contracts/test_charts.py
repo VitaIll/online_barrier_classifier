@@ -1,12 +1,12 @@
-"""Contract tests for `wagie.charts.ChartBattery` and the theme module.
+"""Contract tests for ``wagie.charts.ChartBattery`` and the theme module.
 
 ChartBattery is the SINGLE chart battery: render against any EngineResult,
 get back a documented key-set of PNG paths. These tests pin down:
 
   - the rendered key set always contains equity_curve / drawdown / pnl_distribution
   - reliability + p_histogram only appear when y/p are passed (and non-empty)
-  - coverage_bars only when coverage_per_alpha is non-empty
-  - quantile_drift only when q_history is non-empty
+  - the engine's streaming p_online_history / label_history feed render_all
+    automatically — calibration charts appear without explicit y/p kwargs
   - every produced PNG is non-empty (>1KB)
   - empty fills do not crash
   - apply_theme() actually mutates plt.rcParams
@@ -47,7 +47,12 @@ def _make_fill(pnl_log_net: float) -> BarrierTouched:
     )
 
 
-def _engine_result(pnls: Iterable[float]) -> EngineResult:
+def _engine_result(
+    pnls: Iterable[float],
+    *,
+    p_online_history: list[float] | None = None,
+    label_history: list[int] | None = None,
+) -> EngineResult:
     fills = [_make_fill(p) for p in pnls]
     ledger = BrokerLedger(fills=fills, n_open_at_finalize=0, config={})
     return EngineResult(
@@ -59,6 +64,8 @@ def _engine_result(pnls: Iterable[float]) -> EngineResult:
         n_actions_rejected=0,
         pipeline_state_hash=b"\x00" * 32,
         final_portfolio=Portfolio(),
+        p_online_history=p_online_history or [],
+        label_history=label_history or [],
     )
 
 
@@ -100,60 +107,30 @@ def test_render_all_skips_calibration_when_y_p_empty(tmp_path: Path) -> None:
     assert "p_histogram" not in out
 
 
-def test_render_all_adds_coverage_bars(tmp_path: Path) -> None:
-    res = _engine_result([0.001])
-    coverage = [
-        {"alpha": 0.10, "empirical": 0.91, "target": 0.90, "gap": 0.01, "n": 100},
-        {"alpha": 0.20, "empirical": 0.78, "target": 0.80, "gap": -0.02, "n": 100},
-    ]
-    out = ChartBattery().render_all(
-        res, tmp_path / "charts", coverage_per_alpha=coverage,
+def test_render_all_uses_engine_history_by_default(tmp_path: Path) -> None:
+    """When the EngineResult carries p_online_history / label_history,
+    calibration charts render without explicit y/p kwargs."""
+    res = _engine_result(
+        [0.001],
+        p_online_history=[0.2, 0.4, 0.6, 0.8, 0.5, 0.3, 0.7, 0.9, 0.1, 0.55],
+        label_history=[0, 0, 1, 1, 0, 0, 1, 1, 0, 1],
     )
-    assert "coverage_bars" in out
-    assert out["coverage_bars"].stat().st_size > 1024
-
-
-def test_render_all_skips_coverage_when_empty_or_none(tmp_path: Path) -> None:
-    res = _engine_result([0.001])
-    o1 = ChartBattery().render_all(res, tmp_path / "c1", coverage_per_alpha=None)
-    o2 = ChartBattery().render_all(res, tmp_path / "c2", coverage_per_alpha=[])
-    assert "coverage_bars" not in o1
-    assert "coverage_bars" not in o2
-
-
-def test_render_all_adds_quantile_drift(tmp_path: Path) -> None:
-    res = _engine_result([0.001])
-    out = ChartBattery().render_all(
-        res, tmp_path / "charts", q_history=[0.1, 0.12, 0.11, 0.13, 0.14, 0.12],
-    )
-    assert "quantile_drift" in out
-    assert out["quantile_drift"].stat().st_size > 1024
-
-
-def test_render_all_skips_quantile_drift_when_empty(tmp_path: Path) -> None:
-    res = _engine_result([0.001])
-    o1 = ChartBattery().render_all(res, tmp_path / "q1", q_history=None)
-    o2 = ChartBattery().render_all(res, tmp_path / "q2", q_history=[])
-    assert "quantile_drift" not in o1
-    assert "quantile_drift" not in o2
+    out = ChartBattery().render_all(res, tmp_path / "charts")
+    assert "reliability" in out
+    assert "p_histogram" in out
 
 
 def test_render_all_full_optional_set(tmp_path: Path) -> None:
-    """All seven documented chart keys when every optional input is provided."""
+    """All five documented chart keys when calibration inputs are provided."""
     res = _engine_result([0.001, -0.002, 0.0015])
     out = ChartBattery().render_all(
         res, tmp_path / "charts",
         y_true=[0, 1, 1, 0, 1],
         p_pred=[0.2, 0.8, 0.7, 0.3, 0.6],
-        coverage_per_alpha=[
-            {"alpha": 0.10, "empirical": 0.9, "target": 0.9, "gap": 0.0, "n": 50},
-        ],
-        q_history=[0.1, 0.12, 0.13, 0.11, 0.14],
     )
     assert set(out.keys()) == {
         "equity_curve", "drawdown", "pnl_distribution",
         "reliability", "p_histogram",
-        "coverage_bars", "quantile_drift",
     }
 
 

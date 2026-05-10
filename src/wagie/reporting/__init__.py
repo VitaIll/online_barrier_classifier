@@ -1,8 +1,8 @@
 """wagie.reporting — the SINGLE report format.
 
-`Report.render(spec, metrics, charts, out_path)` writes a Markdown report
-with calibration leading, then trading, then coverage. No bespoke per-
-experiment templates: extend this renderer.
+``Report.render(spec, metrics, charts, out_path)`` writes a Markdown report
+with calibration leading, then trading. No bespoke per-experiment templates:
+extend this renderer.
 
 Public API:
     from wagie.reporting import Report
@@ -56,6 +56,16 @@ class Report:
         lines.append("")
         lines.append(f"- **Brier**: `{metrics.get('brier', 0.0):.5f}`")
         lines.append(f"- **ECE**: `{metrics.get('ece', 0.0):.5f}`")
+        per_regime = metrics.get("calibration_by_regime", []) or []
+        if per_regime:
+            lines.append("")
+            lines.append("| regime | n | Brier | ECE |")
+            lines.append("|---|---|---|---|")
+            for r in per_regime:
+                lines.append(
+                    f"| {r.get('regime_id', '?')} | {r.get('n', 0)} "
+                    f"| {r.get('brier', 0.0):.5f} | {r.get('ece', 0.0):.5f} |"
+                )
         if "reliability" in chart_paths:
             lines.append("")
             lines.append(self._image("Reliability diagram", chart_paths["reliability"], out_path))
@@ -92,30 +102,8 @@ class Report:
             lines.append(self._image("PnL distribution", chart_paths["pnl_distribution"], out_path))
         lines.append("")
 
-        # === 3. Coverage ===
-        lines.append("## 3. Conformal coverage")
-        lines.append("")
-        cov = metrics.get("coverage", []) or []
-        if cov:
-            lines.append("| α | empirical | target | gap | n |")
-            lines.append("|---|---|---|---|---|")
-            for c in cov:
-                lines.append(
-                    f"| {c['alpha']:.2f} | {c['empirical']:.3f} | "
-                    f"{c['target']:.3f} | {c['gap']:+.3f} | {c['n']} |"
-                )
-        else:
-            lines.append("_no coverage data captured_")
-        if "coverage_bars" in chart_paths:
-            lines.append("")
-            lines.append(self._image("Coverage", chart_paths["coverage_bars"], out_path))
-        if "quantile_drift" in chart_paths:
-            lines.append("")
-            lines.append(self._image("Quantile drift", chart_paths["quantile_drift"], out_path))
-        lines.append("")
-
-        # === 4. Operational ===
-        lines.append("## 4. Operational")
+        # === 3. Operational ===
+        lines.append("## 3. Operational")
         lines.append("")
         lines.append(f"- **n_decisions**: `{metrics.get('n_decisions', 0)}`")
         lines.append(f"- **n_filled**: `{metrics.get('n_filled', 0)}`")
@@ -126,8 +114,8 @@ class Report:
         lines.append(f"- **PR-AUC** (diagnostic): `{metrics.get('pr_auc', 0.0):.3f}`")
         lines.append("")
 
-        # === 5. Spec ===
-        lines.append("## 5. Spec")
+        # === 4. Spec ===
+        lines.append("## 4. Spec")
         lines.append("")
         lines.append("```yaml")
         lines.append(self._yaml_dump(spec_dict))

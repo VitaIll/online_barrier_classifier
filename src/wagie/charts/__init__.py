@@ -1,8 +1,8 @@
 """wagie.charts — the SINGLE chart battery.
 
-`ChartBattery.render_all(result, out_dir)` produces every chart this repo
-supports, in a consistent visual theme. Calibration leads, then trading,
-then coverage. No bespoke per-experiment charts: extend the battery instead.
+``ChartBattery.render_all(result, out_dir)`` produces every chart this repo
+supports, in a consistent visual theme. Calibration leads, then trading.
+No bespoke per-experiment charts: extend the battery instead.
 
 Public API:
     from wagie.charts import ChartBattery
@@ -17,12 +17,11 @@ _matplotlib.use("Agg", force=True)
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import Optional, Sequence
 
 from wagie.engine import EngineResult
 
 from .calibration import probability_histogram, reliability_diagram
-from .coverage import coverage_gap_bars, quantile_drift
 from .theme import PALETTE, apply_theme, figsize
 from .trading import drawdown_chart, equity_curve, pnl_distribution
 
@@ -43,8 +42,6 @@ class ChartBattery:
         *,
         y_true: Optional[Sequence[int]] = None,
         p_pred: Optional[Sequence[float]] = None,
-        coverage_per_alpha: Optional[Sequence[Mapping]] = None,
-        q_history: Optional[Sequence[float]] = None,
     ) -> dict[str, Path]:
         """Render every default chart. Returns name → path map."""
         out_dir = Path(out_dir)
@@ -56,6 +53,13 @@ class ChartBattery:
         out["drawdown"] = drawdown_chart(pnl, out_dir / "02_drawdown.png")
         out["pnl_distribution"] = pnl_distribution(pnl, out_dir / "03_pnl_distribution.png")
 
+        # Calibration data: prefer caller-supplied; otherwise pull from the
+        # engine's streaming capture so charts reflect what metrics see.
+        if y_true is None and hasattr(result, "label_history"):
+            y_true = result.label_history
+        if p_pred is None and hasattr(result, "p_online_history"):
+            p_pred = result.p_online_history
+
         if y_true is not None and p_pred is not None and len(y_true) > 0:
             out["reliability"] = reliability_diagram(
                 y_true, p_pred, out_dir / "04_reliability.png",
@@ -63,16 +67,6 @@ class ChartBattery:
             )
             out["p_histogram"] = probability_histogram(
                 p_pred, out_dir / "05_p_histogram.png",
-            )
-
-        if coverage_per_alpha:
-            out["coverage_bars"] = coverage_gap_bars(
-                coverage_per_alpha, out_dir / "06_coverage.png",
-            )
-
-        if q_history is not None and len(q_history) > 0:
-            out["quantile_drift"] = quantile_drift(
-                q_history, out_dir / "07_quantile_drift.png",
             )
 
         return out
@@ -83,5 +77,4 @@ __all__ = [
     "PALETTE", "apply_theme", "figsize",
     "reliability_diagram", "probability_histogram",
     "equity_curve", "drawdown_chart", "pnl_distribution",
-    "coverage_gap_bars", "quantile_drift",
 ]

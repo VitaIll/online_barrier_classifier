@@ -7,8 +7,8 @@ import pytest
 from wagie.checks import check_wagie_stage
 from wagie.features import BaseBarFeatures, FeatureBuilder, RegimeCuts, RegimeFeature
 from wagie.features.catalog import default_streaming_features
-from wagie.pipeline import LabelBuffer, MondrianACICalibrator, OnlineARFCorrector
-from wagie.strategy import EvCalibratedSize, PureConformalGate
+from wagie.pipeline import LabelBuffer, OnlineARFCorrector
+from wagie.strategy import EvCalibratedSize, ThresholdGate
 
 
 def _stages():
@@ -17,9 +17,8 @@ def _stages():
         FeatureBuilder(default_streaming_features()[:5]),  # small sample
         RegimeFeature(RegimeCuts(feature="x", edges=(1.0, 2.0), labels=("a", "b", "c"))),
         OnlineARFCorrector(),
-        MondrianACICalibrator(),
         LabelBuffer(),
-        PureConformalGate(name="pure"),
+        ThresholdGate(name="threshold"),
         EvCalibratedSize(name="ev"),
     ]
 

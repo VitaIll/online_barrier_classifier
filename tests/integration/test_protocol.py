@@ -5,7 +5,9 @@ This is the SINGLE protocol the entire repo runs through. The test asserts:
     2. Outputs are written: spec.yaml, metrics.json, charts/, report.md
     3. Charts are non-empty PNG files
     4. Metrics report has the expected fields (calibration leads)
-    5. The state hash is deterministic across two identical runs
+    5. Brier / ECE are non-zero — calibration data flows from the engine
+       through MetricsBattery automatically.
+    6. The state hash is deterministic across two identical runs
 """
 
 from __future__ import annotations
@@ -28,10 +30,8 @@ def _build_spec(parquet: Path, out_dir: Path) -> ExperimentSpec:
             "model": {
                 "catboost_path": None,
                 "arf": {"n_models": 5, "lambda_value": 6.0, "seed": 42},
-                "aci": {"alphas": [0.05, 0.10, 0.20], "gamma": 0.01,
-                        "n_regimes": 3, "q_init": 0.5},
             },
-            "strategy": {"kind": "pure_conformal", "alpha": 0.10},
+            "strategy": {"kind": "threshold_gate", "tau": 0.20},
             "broker": {"inventory_cap": 5},
             "runtime": {"warmup_samples": 10},
         },
@@ -64,6 +64,9 @@ def test_protocol_runs_end_to_end(synthetic_minute_parquet, tmp_path):
     assert "trading" in metrics
     assert "n_decisions" in metrics
     assert metrics["pipeline_state_hash"]
+    # Calibration leads — Brier/ECE are non-zero on the smoke fixture.
+    assert metrics["brier"] > 0.0
+    assert metrics["ece"] >= 0.0
 
     # Charts exist (at least the trading set, which always renders)
     charts_dir = result.out_dir / "charts"
@@ -79,7 +82,8 @@ def test_protocol_runs_end_to_end(synthetic_minute_parquet, tmp_path):
     body = result.report_path.read_text()
     assert "Calibration" in body
     assert "Trading" in body
-    assert "Conformal coverage" in body
+    # No more conformal-coverage section.
+    assert "Conformal coverage" not in body
 
     # Brief sanity: at least *some* approved actions on the test slice
     assert metrics["n_decisions"] >= 0

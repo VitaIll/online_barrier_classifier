@@ -38,33 +38,19 @@ class ARFSubConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ACISubConfig(BaseModel):
-    alphas: tuple[float, ...] = (0.05, 0.10, 0.20)
-    gamma: float = 0.01
-    n_regimes: int = 3
-    q_init: float = 0.5
-    regime_feature: str = "regime_id"
-    q_init_by_regime: Optional[dict] = None
-
-    model_config = ConfigDict(extra="forbid")
-
-
 class ModelConfig(BaseModel):
     catboost_path: Optional[str] = None
     catboost_ensemble_n: int = 1
     selected_features_path: Optional[str] = None
     arf: ARFSubConfig = Field(default_factory=ARFSubConfig)
-    aci: ACISubConfig = Field(default_factory=ACISubConfig)
 
     model_config = ConfigDict(extra="forbid")
 
 
 class StrategyConfig(BaseModel):
-    kind: Literal["pure_conformal", "ev_calibrated_size"] = "pure_conformal"
-    alpha: float = 0.10
+    kind: Literal["threshold_gate", "pure_conformal", "ev_calibrated_size"] = "threshold_gate"
+    tau: float = 0.50
     k: Optional[float] = None
-    tau: Optional[float] = None
-    layer: Optional[str] = None
     extra: dict = Field(default_factory=dict)
 
     model_config = ConfigDict(extra="forbid")
@@ -116,8 +102,15 @@ class WagieConfig(BaseModel):
     def from_yaml(cls, path: str | Path) -> "WagieConfig":
         with open(path) as f:
             data = yaml.safe_load(f) or {}
-        if "aci_alphas" in data.get("model", {}).get("aci", {}):
-            data["model"]["aci"]["alphas"] = tuple(data["model"]["aci"]["alphas"])
+        # Quietly drop legacy `aci` block from old YAMLs so they still load.
+        model = data.get("model")
+        if isinstance(model, dict):
+            model.pop("aci", None)
+        # Drop legacy strategy.alpha / .layer fields if present.
+        strategy = data.get("strategy")
+        if isinstance(strategy, dict):
+            strategy.pop("alpha", None)
+            strategy.pop("layer", None)
         return cls.model_validate(data)
 
     def hash(self) -> str:
@@ -129,5 +122,5 @@ class WagieConfig(BaseModel):
 __all__ = [
     "WagieConfig", "DataConfig", "ModelConfig", "StrategyConfig",
     "BrokerConfig", "CVConfig", "RuntimeConfig",
-    "ARFSubConfig", "ACISubConfig",
+    "ARFSubConfig",
 ]

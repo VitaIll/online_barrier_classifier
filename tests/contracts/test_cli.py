@@ -33,6 +33,15 @@ def _run(*args: str, cwd: Path | None = None,
     # Windows console encodings.
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONUTF8", "1")
+    # If PYTHONPATH is a relative path (e.g. "src" set by the test runner
+    # to point at this worktree's src tree), absolutise it BEFORE we cd into
+    # tmp_path — otherwise the subprocess looks for "src" inside tmp_path.
+    pp = env.get("PYTHONPATH")
+    if pp:
+        parts = pp.split(os.pathsep)
+        abs_parts = [str(Path(p).resolve()) if not Path(p).is_absolute() else p
+                     for p in parts]
+        env["PYTHONPATH"] = os.pathsep.join(abs_parts)
     return subprocess.run(
         [sys.executable, "-m", "wagie", *args],
         cwd=str(cwd) if cwd else None,
@@ -83,10 +92,8 @@ def _make_minimal_spec(parquet: Path, out_dir: Path) -> dict:
             "model": {
                 "catboost_path": None,
                 "arf": {"n_models": 5, "lambda_value": 6.0, "seed": 42},
-                "aci": {"alphas": [0.05, 0.10, 0.20], "gamma": 0.01,
-                        "n_regimes": 3, "q_init": 0.5},
             },
-            "strategy": {"kind": "pure_conformal", "alpha": 0.10},
+            "strategy": {"kind": "threshold_gate", "tau": 0.20},
             "broker": {"inventory_cap": 5},
             "runtime": {"warmup_samples": 10},
         },

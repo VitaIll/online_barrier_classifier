@@ -1,4 +1,4 @@
-"""Contract tests for `wagie.reporting.Report`.
+"""Contract tests for ``wagie.reporting.Report``.
 
 Pins down the markdown report's section ordering, image-ref portability,
 empty-metrics fallback, spec-block YAML round-trip, and run_id surfacing.
@@ -23,7 +23,7 @@ def _make_chart_pngs(charts_dir: Path) -> dict[str, Path]:
     png_sig = b"\x89PNG\r\n\x1a\n"
     paths: dict[str, Path] = {}
     for key in ("equity_curve", "drawdown", "pnl_distribution",
-                "reliability", "p_histogram", "coverage_bars", "quantile_drift"):
+                "reliability", "p_histogram"):
         p = charts_dir / f"{key}.png"
         p.write_bytes(png_sig)
         paths[key] = p
@@ -34,6 +34,10 @@ def _full_metrics() -> dict:
     return {
         "brier": 0.21,
         "ece": 0.034,
+        "calibration_by_regime": [
+            {"regime_id": 0, "n": 80, "brier": 0.20, "ece": 0.03},
+            {"regime_id": 1, "n": 90, "brier": 0.22, "ece": 0.04},
+        ],
         "trading": {
             "n_trades": 12, "n_tp": 5, "n_sl": 4, "n_timeout": 3,
             "sharpe": 1.234, "probabilistic_sharpe": 0.5, "sortino": 1.0,
@@ -41,10 +45,6 @@ def _full_metrics() -> dict:
             "max_drawdown_log": -0.05, "cdar_5pct_log": -0.02,
             "total_log_return": 0.012, "total_pct_return": 0.012,
         },
-        "coverage": [
-            {"alpha": 0.10, "empirical": 0.91, "target": 0.90, "gap": 0.01, "n": 100},
-            {"alpha": 0.20, "empirical": 0.78, "target": 0.80, "gap": -0.02, "n": 100},
-        ],
         "n_decisions": 30, "n_filled": 12,
         "n_actions_approved": 12, "n_actions_rejected": 5,
         "roc_auc": 0.55, "pr_auc": 0.31,
@@ -63,7 +63,7 @@ def _spec_dict() -> dict:
 # Section ordering & content
 # -----------------------------------------------------------------
 
-def test_render_produces_five_ordered_sections(tmp_path: Path) -> None:
+def test_render_produces_four_ordered_sections(tmp_path: Path) -> None:
     out = tmp_path / "report.md"
     chart_paths = _make_chart_pngs(tmp_path / "charts")
     Report().render(
@@ -77,12 +77,13 @@ def test_render_produces_five_ordered_sections(tmp_path: Path) -> None:
     headers = [
         "## 1. Calibration",
         "## 2. Trading",
-        "## 3. Conformal coverage",
-        "## 4. Operational",
-        "## 5. Spec",
+        "## 3. Operational",
+        "## 4. Spec",
     ]
     indexes = [body.index(h) for h in headers]
     assert indexes == sorted(indexes), f"sections out of order: {indexes}"
+    # Assert there is no longer a Conformal coverage section.
+    assert "Conformal coverage" not in body
 
 
 def test_render_writes_calibration_metrics(tmp_path: Path) -> None:
@@ -95,6 +96,20 @@ def test_render_writes_calibration_metrics(tmp_path: Path) -> None:
     assert "Brier" in body
     assert "ECE" in body
     assert "0.21" in body  # Brier value
+
+
+def test_render_writes_per_regime_calibration_table(tmp_path: Path) -> None:
+    out = tmp_path / "report.md"
+    Report().render(
+        spec_dict=_spec_dict(), metrics=_full_metrics(),
+        chart_paths={}, out_path=out,
+    )
+    body = out.read_text()
+    assert "regime" in body.lower()
+    assert "Brier" in body
+    # Both regimes present
+    assert "| 0 |" in body
+    assert "| 1 |" in body
 
 
 # -----------------------------------------------------------------
@@ -144,20 +159,8 @@ def test_image_refs_fall_back_to_posix_when_outside_report_parent(tmp_path: Path
 
 
 # -----------------------------------------------------------------
-# Empty metrics → 'no coverage data' placeholder
+# Empty metrics fallback
 # -----------------------------------------------------------------
-
-def test_empty_coverage_renders_placeholder(tmp_path: Path) -> None:
-    out = tmp_path / "report.md"
-    Report().render(
-        spec_dict=_spec_dict(),
-        metrics={},  # nothing — exercises every .get(...) fallback
-        chart_paths={},
-        out_path=out,
-    )
-    body = out.read_text(encoding="utf-8")
-    assert "_no coverage data captured_" in body
-
 
 def test_completely_empty_metrics_does_not_crash(tmp_path: Path) -> None:
     out = tmp_path / "report.md"
@@ -165,11 +168,10 @@ def test_completely_empty_metrics_does_not_crash(tmp_path: Path) -> None:
     p = rep.render(spec_dict={}, metrics={}, chart_paths={}, out_path=out)
     assert p == out
     assert out.is_file()
-    # All five sections still rendered
+    # All four sections still rendered
     body = out.read_text()
     for h in ("## 1. Calibration", "## 2. Trading",
-              "## 3. Conformal coverage",
-              "## 4. Operational", "## 5. Spec"):
+              "## 3. Operational", "## 4. Spec"):
         assert h in body
 
 

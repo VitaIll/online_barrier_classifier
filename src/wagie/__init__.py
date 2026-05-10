@@ -53,7 +53,6 @@ from wagie.metrics import MetricsBattery, MetricsReport
 from wagie.pipeline import (
     FrozenCatBoostPredictor,
     LabelBuffer,
-    MondrianACICalibrator,
     OnlineARFCorrector,
     Pipeline,
 )
@@ -69,10 +68,10 @@ from wagie.risk import (
 )
 from wagie.strategy import (
     EvCalibratedSize,
-    PureConformalGate,
     Strategy,
     StrategyBase,
     StrategyContext,
+    ThresholdGate,
 )
 
 
@@ -90,10 +89,10 @@ __all__ = [
     # Pipeline
     "Pipeline",
     "FrozenCatBoostPredictor", "OnlineARFCorrector",
-    "MondrianACICalibrator", "LabelBuffer",
+    "LabelBuffer",
     # Strategy
     "Strategy", "StrategyContext", "StrategyBase",
-    "PureConformalGate", "EvCalibratedSize",
+    "ThresholdGate", "EvCalibratedSize",
     # Risk
     "RiskEngine", "RiskPolicy",
     "MaxPositionsPolicy", "MaxDrawdownPolicy", "MaxLossPerPositionPolicy",

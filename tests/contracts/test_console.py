@@ -11,9 +11,9 @@ from wagie.features.catalog import default_streaming_features
 from wagie.io.brokers import SimBroker
 from wagie.io.clock import TestClock
 from wagie.io.sources import ParquetReplaySource
-from wagie.pipeline import LabelBuffer, MondrianACICalibrator, OnlineARFCorrector, Pipeline
+from wagie.pipeline import LabelBuffer, OnlineARFCorrector, Pipeline
 from wagie.risk import KillSwitchPolicy, RiskEngine
-from wagie.strategy import PureConformalGate
+from wagie.strategy import ThresholdGate
 
 
 def _build_engine(parquet):
@@ -23,10 +23,9 @@ def _build_engine(parquet):
                       edges=(1e-6, 1e-5), labels=("low", "med", "high"))
     rg = RegimeFeature(cuts)
     arf = OnlineARFCorrector()
-    aci = MondrianACICalibrator()
     lb = LabelBuffer()
-    strat = PureConformalGate(name="pcg", alpha=0.10)
-    pipeline = Pipeline([base_bar, fb, rg, arf, aci, lb, strat])
+    strat = ThresholdGate(name="pcg", tau=0.20)
+    pipeline = Pipeline([base_bar, fb, rg, arf, lb, strat])
     src = ParquetReplaySource(str(parquet), m_minutes=20)
     bro = SimBroker(m_minutes=20, inventory_cap=5)
     eng = Engine(source=src, pipeline=pipeline, broker=bro,

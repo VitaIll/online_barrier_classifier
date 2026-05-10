@@ -1,8 +1,7 @@
 """Pipeline primitives — Stage Protocol + StageKind enum.
 
 Stage is the atomic unit of a Pipeline. Concrete stages (CatBoostPredictor,
-OnlineARFCorrector, MondrianACICalibrator, strategies) implement the Stage
-Protocol.
+OnlineARFCorrector, strategies) implement the Stage Protocol.
 
 The sealed `wagie.Pipeline` (in wagie.pipeline.sealed) validates that stage
 ordering monotonically increases by StageKind.
@@ -22,13 +21,16 @@ class StageKind(IntEnum):
     The sealed Pipeline enforces this ordering at construction:
         AGGREGATOR < FEATURE < PREDICTOR < CORRECTOR
         < CALIBRATOR < LABEL_BUFFER < STRATEGY
+
+    The CALIBRATOR slot is reserved (no shipped stage occupies it after the
+    Mondrian-ACI removal) — strategies gate on the calibrated p_online directly.
     """
 
     AGGREGATOR = 0      # MinuteBar -> DecisionBar (lives in DataSource, not Pipeline)
     FEATURE = 1         # adds features to Observation
     PREDICTOR = 2       # adds p_offline (frozen offline model)
     CORRECTOR = 3       # adds p_online (online learner)
-    CALIBRATOR = 4      # adds q_lo, in_set
+    CALIBRATOR = 4      # reserved (formerly Mondrian-ACI in_set/q_lo)
     LABEL_BUFFER = 5    # delayed-label staging
     STRATEGY = 6        # adds decision
     DRIFT_DETECTOR = 7  # emits DriftDetected events (sidechannel)
