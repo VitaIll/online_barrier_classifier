@@ -6,13 +6,23 @@ ScaledOut, Closed). Maintains a live Portfolio (read-only snapshot via
 
 Per P3: positions keyed by PositionId; Portfolio.net_position(InstrumentId)
 aggregates over instrument. Per P1: default inventory_cap = 5.
+
+Tie-break — when SL and TP both fire in the same minute the order is
+ambiguous; configurable via `tie_break`:
+    - "pessimistic_sl_first" (default): SL wins. The conservative audit-safe
+      choice but systematically overstates losses for upside-excursion labels.
+    - "optimistic_tp_first": TP wins. Symmetric counterpart for falsification.
+    - "probabilistic_hl_bridge": Bernoulli(0.5) per collision (deterministic
+      seed via the bar's open timestamp). Treats both barriers as equiprobable
+      first-touches when path inside the minute is unknown.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Iterator, Optional
+import random
+from dataclasses import dataclass, field
+from typing import Iterator, Literal, Optional
 
 from wagie.core.action import Action, ActionKind, ExitReason, Side
 from wagie.core.event import (
@@ -32,6 +42,29 @@ from wagie.core.numeric import LogReturn, Price, Probability, Quantity
 from wagie.core.portfolio import Portfolio
 from wagie.core.position import Position
 from wagie.core.time import Duration, Timestamp
+
+
+# A small dataclass mirror of config.BrokerCostModel so SimBroker has zero
+# pydantic dependency at import time. config.BrokerCostModel duck-types into
+# this when the engine is wired.
+@dataclass(frozen=True)
+class _CostSpec:
+    taker_fee_bps: float = 1.0
+    spread_bps: float = 0.0
+    slippage_bps_per_unit_size: float = 0.0
+
+    def cost_log_per_side(self, size: float = 1.0) -> float:
+        bps = (
+            float(self.taker_fee_bps)
+            + 0.5 * float(self.spread_bps)
+            + float(self.slippage_bps_per_unit_size) * float(size)
+        )
+        return bps * 1e-4
+
+
+TieBreak = Literal[
+    "pessimistic_sl_first", "optimistic_tp_first", "probabilistic_hl_bridge"
+]
 
 
 @dataclass
@@ -64,14 +97,34 @@ class SimBroker:
         self,
         *,
         m_minutes: int = 20,
-        cost: float = 1e-4,                # log-return per side
+        cost: float = 1e-4,                # log-return per side (legacy flat)
+        cost_model: Optional[object] = None,  # _CostSpec OR config.BrokerCostModel
         execution_latency_minutes: int = 1,
         inventory_cap: int = 5,            # P1: default 5
+        stop_loss_log: Optional[float] = 0.0041113,  # None ⇒ no stop-loss
+        tie_break: TieBreak = "pessimistic_sl_first",
     ):
         self.m_minutes = int(m_minutes)
+        # legacy flat cost (kept for backwards-compat); cost_model takes precedence
         self.cost = LogReturn(float(cost))
+        self.cost_model: _CostSpec = (
+            cost_model if cost_model is not None
+            else _CostSpec(taker_fee_bps=float(cost) * 1e4)
+        )
         self.execution_latency_minutes = int(execution_latency_minutes)
         self.inventory_cap = int(inventory_cap)
+        # stop_loss_log: None means "no stop loss" — broker skips SL branch
+        # in first-touch scan and the position carries an inf SL.
+        self.stop_loss_log: Optional[float] = (
+            None if stop_loss_log is None else float(stop_loss_log)
+        )
+        if tie_break not in (
+            "pessimistic_sl_first",
+            "optimistic_tp_first",
+            "probabilistic_hl_bridge",
+        ):
+            raise ValueError(f"unknown tie_break {tie_break!r}")
+        self.tie_break: TieBreak = tie_break
 
         self._next_position_id: int = 1
         self._next_order_id: int = 1
@@ -83,6 +136,15 @@ class SimBroker:
         self._closed_history: list[BarrierTouched] = []
         self._events: list[Event] = []
         self._global_minute_idx: int = 0
+
+    # ---- cost helpers ----
+
+    def _cost_log_for(self, size: float) -> float:
+        """Per-side cost in log-units, scaled by position size."""
+        try:
+            return float(self.cost_model.cost_log_per_side(float(size)))
+        except (AttributeError, TypeError):
+            return float(self.cost)
 
     # ---- public observability (read-only) ----
 
@@ -177,7 +239,7 @@ class SimBroker:
             size_removed=Quantity(size_to_remove),
             exit_price=pos.last_mark_price,
             ts=ts,
-            cost_log=self.cost,
+            cost_log=LogReturn(self._cost_log_for(size_to_remove)),
         )
         self._portfolio = self._portfolio.with_position(new_pos)
         # Realize the partial PnL into the portfolio's cumulative
@@ -205,7 +267,7 @@ class SimBroker:
             exit_price=pos.last_mark_price,
             ts=ts,
             reason=reason,
-            cost_log=self.cost,
+            cost_log=LogReturn(self._cost_log_for(float(pos.current_size))),
         )
         self._portfolio = self._portfolio.with_position(new_pos)
         delta = float(new_pos.realized_pnl_log) - float(pos.realized_pnl_log)
@@ -273,6 +335,14 @@ class SimBroker:
                 if not (math.isfinite(ep) and ep > 0):
                     continue
                 d = po.decision
+                # Resolve stop-loss: action overrides; otherwise broker default
+                # (which may be None ⇒ "no stop loss" ⇒ +inf in log-units).
+                if d.stop_loss is not None:
+                    sl_log = d.stop_loss
+                elif self.stop_loss_log is None:
+                    sl_log = LogReturn(float("inf"))
+                else:
+                    sl_log = LogReturn(self.stop_loss_log)
                 pos = Position.open_at(
                     position_id=po.position_id,
                     instrument=po.instrument,
@@ -281,7 +351,7 @@ class SimBroker:
                     entry_price=Price(ep),
                     ts=m.close_time,
                     take_profit_log=d.take_profit or LogReturn.from_bps(41),
-                    stop_loss_log=d.stop_loss or LogReturn.from_bps(41),
+                    stop_loss_log=sl_log,
                     expiry=po.expiry,
                 )
                 # Attach features_at_open onto the position via fills (we keep
@@ -328,14 +398,15 @@ class SimBroker:
             if pos is None or pos.closed:
                 continue
             ep = float(pos.avg_entry_price)
+            sl_finite = math.isfinite(float(pos.stop_loss_log))
             if pos.side == Side.LONG:
                 tp_price = ep * math.exp(float(pos.take_profit_log))
                 sl_price = (ep * math.exp(-float(pos.stop_loss_log))
-                             if math.isfinite(float(pos.stop_loss_log)) else 0.0)
+                             if sl_finite else 0.0)
             else:
                 tp_price = ep * math.exp(-float(pos.take_profit_log))
                 sl_price = (ep * math.exp(float(pos.stop_loss_log))
-                             if math.isfinite(float(pos.stop_loss_log)) else float("inf"))
+                             if sl_finite else float("inf"))
             # Determine when to start scanning — for newly-opened positions only
             # scan minutes AFTER the entry minute. We use a simple heuristic:
             # if pos opened earlier than this bar, scan all minutes.
@@ -348,13 +419,16 @@ class SimBroker:
                 mb = minutes[i]
                 hi, lo = float(mb.high), float(mb.low)
                 if pos.side == Side.LONG:
-                    sl_hit = lo <= sl_price
+                    sl_hit = sl_finite and (lo <= sl_price)
                     tp_hit = hi >= tp_price
                 else:
-                    sl_hit = hi >= sl_price
+                    sl_hit = sl_finite and (hi >= sl_price)
                     tp_hit = lo <= tp_price
                 if sl_hit and tp_hit:
-                    self._barrier_close(pos, mb, ExitReason.SL, sl_price, ts)
+                    reason, exit_px = self._resolve_tie_break(
+                        sl_price=sl_price, tp_price=tp_price, mb=mb,
+                    )
+                    self._barrier_close(pos, mb, reason, exit_px, ts)
                     exited = True
                     break
                 if sl_hit:
@@ -389,13 +463,38 @@ class SimBroker:
         self._global_minute_idx += len(minutes)
         return new_fills
 
+    def _resolve_tie_break(
+        self,
+        *,
+        sl_price: float,
+        tp_price: float,
+        mb: MinuteBar,
+    ) -> tuple[ExitReason, float]:
+        """Pick (reason, exit_price) when SL and TP both fire in the same minute.
+
+        See module docstring for semantics. Probabilistic mode draws Bernoulli(0.5)
+        from a per-minute deterministic seed (the minute's open ts) so backtests
+        are reproducible across runs.
+        """
+        if self.tie_break == "optimistic_tp_first":
+            return ExitReason.TP, tp_price
+        if self.tie_break == "probabilistic_hl_bridge":
+            seed = int(mb.ts_init.ns) ^ 0x5A5A5A5A
+            rng = random.Random(seed)
+            if rng.random() < 0.5:
+                return ExitReason.TP, tp_price
+            return ExitReason.SL, sl_price
+        # default — pessimistic
+        return ExitReason.SL, sl_price
+
     def _barrier_close(self, pos: Position, mb: MinuteBar, reason: ExitReason,
                        exit_price: float, ts: Timestamp) -> None:
+        cost_log = LogReturn(self._cost_log_for(float(pos.open_size)))
         new_pos = pos.with_close(
             exit_price=Price(float(exit_price)),
             ts=mb.close_time,
             reason=reason,
-            cost_log=self.cost,
+            cost_log=cost_log,
         )
         delta = float(new_pos.realized_pnl_log) - float(pos.realized_pnl_log)
         self._portfolio = self._portfolio.with_position(new_pos)
@@ -408,7 +507,7 @@ class SimBroker:
             entry_price=pos.avg_entry_price, exit_price=Price(float(exit_price)),
             fill_size=Quantity(float(pos.open_size)),
             side=int(pos.side), reason=reason,
-            pnl_log_gross=LogReturn(delta + 2.0 * float(self.cost) * float(pos.open_size)),
+            pnl_log_gross=LogReturn(delta + 2.0 * float(cost_log) * float(pos.open_size)),
             pnl_log_net=LogReturn(delta),
             features_at_open={},
             y_matured=1 if reason == ExitReason.TP else 0,
@@ -417,6 +516,7 @@ class SimBroker:
         self._emit_close_event(new_pos, reason, mb.close_time)
 
     def _emit_close_event(self, pos: Position, reason: ExitReason, ts: Timestamp) -> None:
+        cost_log = self._cost_log_for(float(pos.open_size))
         self._events.append(PositionClosed(
             ts_init=ts, instrument=pos.instrument,
             position_id=int(pos.position_id),
@@ -427,7 +527,7 @@ class SimBroker:
             entry_ts=pos.open_ts,
             exit_ts=ts,
             reason=str(reason),
-            pnl_log_gross=float(pos.realized_pnl_log) + 2.0 * float(self.cost) * float(pos.open_size),
+            pnl_log_gross=float(pos.realized_pnl_log) + 2.0 * float(cost_log) * float(pos.open_size),
             pnl_log_net=float(pos.realized_pnl_log),
             y_matured=1 if reason == ExitReason.TP else 0,
         ))
@@ -448,6 +548,15 @@ class SimBroker:
                 "cost": float(self.cost),
                 "execution_latency_minutes": self.execution_latency_minutes,
                 "inventory_cap": self.inventory_cap,
+                "stop_loss_log": self.stop_loss_log,
+                "tie_break": self.tie_break,
+                "cost_model": {
+                    "taker_fee_bps": float(getattr(self.cost_model, "taker_fee_bps", float(self.cost) * 1e4)),
+                    "spread_bps": float(getattr(self.cost_model, "spread_bps", 0.0)),
+                    "slippage_bps_per_unit_size": float(
+                        getattr(self.cost_model, "slippage_bps_per_unit_size", 0.0)
+                    ),
+                },
             },
         )
 

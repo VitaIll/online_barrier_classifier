@@ -90,7 +90,12 @@ def build_pipeline(
         strat_kwargs["layer"] = cfg.strategy.layer
     strat_kwargs.update(cfg.strategy.extra)
     strat_kwargs.setdefault("take_profit", LogReturn(cfg.broker.take_profit_log))
-    strat_kwargs.setdefault("stop_loss", LogReturn(cfg.broker.stop_loss_log))
+    # stop_loss_log may be None (== "no stop"); pass +inf as the strategy stop.
+    _sl = cfg.broker.stop_loss_log
+    strat_kwargs.setdefault(
+        "stop_loss",
+        LogReturn(float("inf") if _sl is None else float(_sl)),
+    )
     strat_kwargs.setdefault("expiry", Duration.from_minutes(cfg.broker.expiry_minutes))
     stages.append(build_strategy(cfg.strategy.kind, **strat_kwargs))
 
@@ -114,8 +119,11 @@ def run(
     broker = SimBroker(
         m_minutes=cfg.data.m_minutes,
         cost=cfg.broker.cost_bps * 1e-4,
+        cost_model=cfg.broker.resolved_cost_model(),
         execution_latency_minutes=cfg.broker.execution_latency_minutes,
         inventory_cap=cfg.broker.inventory_cap,
+        stop_loss_log=cfg.broker.stop_loss_log,
+        tie_break=cfg.broker.tie_break,
     )
     pipeline, label_buf = build_pipeline(cfg, feature_builder, base_bar, regime_feature)
 

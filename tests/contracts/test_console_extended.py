@@ -194,7 +194,10 @@ def test_unkill_disengages_kill_switch(synthetic_minute_parquet):
 
 def test_risk_add_inserts_policy_between_bars(synthetic_minute_parquet):
     eng = _build_engine(synthetic_minute_parquet)
-    # Make sure starting state has no max_drawdown policy.
+    # Default RiskEngine now wires max_drawdown by default — remove it first
+    # so we can exercise the hot-add path on a clean slate.
+    if eng.risk_engine.get("max_drawdown") is not None:
+        eng.risk_engine.remove("max_drawdown")
     assert eng.risk_engine.get("max_drawdown") is None
     console = TradingConsole(eng).start()
 

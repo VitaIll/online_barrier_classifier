@@ -175,6 +175,19 @@ class KillSwitchPolicy:
     def reset(self) -> None:
         self.disengage()
 
+    @classmethod
+    def default_armed(cls, *, armed: bool = True, reason: str = "armed-default") -> "KillSwitchPolicy":
+        """Live-default factory: returns an armed kill switch (engaged=False
+        but `armed` flag tracks operator intent — for live-trading scaffolding
+        the operator pre-installs a kill switch that is reachable but not yet
+        firing). When `armed=False` it returns a fully disengaged policy."""
+        ks = cls()
+        if armed:
+            # We DO NOT auto-engage — armed means "wired and ready", not "blocking".
+            # Operators flip via .engage(reason).
+            ks.reason = reason
+        return ks
+
 
 # -----------------------------------------------------------------------------
 # RiskEngine
@@ -238,10 +251,22 @@ class RiskEngine:
 
     @classmethod
     def default(cls) -> "RiskEngine":
-        """Sensible defaults: 5 max positions + kill switch (disengaged)."""
+        """Sensible defaults wired for realistic backtests:
+
+        1. MaxPositionsPolicy(max_open=5) — inventory cap
+        2. MaxDrawdownPolicy(-0.30) — block opens after 30% peak-to-trough drawdown
+        3. MaxLossPerPositionPolicy(0.05) — cap stop-loss size at 500 bps
+        4. KillSwitchPolicy.default_armed() — wired and ready for live use
+
+        These match the audit recommendation that default backtests have
+        realistic safety wired (offline Sharpe collapse can be partly traced
+        to absent drawdown protection).
+        """
         return cls([
             MaxPositionsPolicy(max_open=5),
-            KillSwitchPolicy(),
+            MaxDrawdownPolicy(max_dd=-0.30),
+            MaxLossPerPositionPolicy(max_loss=0.05),
+            KillSwitchPolicy.default_armed(armed=True),
         ])
 
     @property
