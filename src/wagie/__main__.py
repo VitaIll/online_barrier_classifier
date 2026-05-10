@@ -7,10 +7,14 @@ Subcommands:
     wagie cv <spec.yaml>                  # cross-validation
     wagie data synth                      # write a deterministic synthetic
                                           # 1m parquet to data/synthetic/
-    wagie info                            # version + public surface
+    wagie info [--internal]               # version + public (or internal) surface
 
 Nothing else in the repo provides a CLI. Custom scripts are forbidden — every
 experiment goes through `wagie experiment run`.
+
+Logging:
+    Set ``WAGIE_LOG_FORMAT=json`` to emit one JSON record per line on stderr.
+    See :mod:`wagie.observability` for the schema.
 """
 
 from __future__ import annotations
@@ -161,12 +165,24 @@ def _cmd_info(args) -> int:
     import wagie
     print(f"wagie {wagie.__version__}")
     print(f"public types: {len(wagie.__all__)}")
+    if getattr(args, "internal", False):
+        # Internal surface: anything in the package namespace not on __all__.
+        # See wagie.public vs wagie.internal in src/wagie/__init__.py docstring.
+        public = set(wagie.__all__)
+        internal = sorted(
+            name for name in dir(wagie)
+            if not name.startswith("_") and name not in public
+        )
+        print(f"internal symbols: {len(internal)}")
+        for name in internal:
+            print(f"  {name}")
     return 0
 
 
 def main(argv=None) -> int:
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(message)s")
+    # Structured logging: WAGIE_LOG_FORMAT=json picks the JSON formatter.
+    from wagie.observability import configure_logging
+    configure_logging(level=logging.INFO)
     p = argparse.ArgumentParser(prog="wagie")
     sub = p.add_subparsers(dest="cmd", required=True)
 
@@ -220,6 +236,10 @@ def main(argv=None) -> int:
     d_synth.set_defaults(func=_cmd_data_synth)
 
     info_p = sub.add_parser("info", help="Print wagie version + public surface.")
+    info_p.add_argument(
+        "--internal", action="store_true",
+        help="Also list internal symbols (not in wagie.__all__).",
+    )
     info_p.set_defaults(func=_cmd_info)
 
     args = p.parse_args(argv)
