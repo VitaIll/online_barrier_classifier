@@ -1,14 +1,14 @@
 # agent/
 
-Agentic loop — **prompts and memory only**, no Python source. The loop runs
-in-session inside Claude Code (per `RESEARCH/LOOP_DISCIPLINE.md`); this
-folder holds the durable artifacts that survive across sessions.
+Agentic loop — durable artifacts that survive across sessions. The loop
+itself runs in-session inside Claude Code (per `RESEARCH/LOOP_DISCIPLINE.md`);
+this folder is where its prompts and memory snapshots live.
 
-```
-agent/
-├── prompts/      # role prompt templates (LITERATURE-SCOUT, CRITIC, …)
-└── memory/       # per-session memory snapshots (curated)
-```
+When you start using the loop, populate this directory however you like.
+Common conventions:
+
+- `prompts/<role>.md` — role prompt templates (LITERATURE-SCOUT, CRITIC, …)
+- `memory/<topic>.md` — curated cross-session memory snapshots
 
 The loop pattern (see `~/.claude/projects/.../memory/`):
 
