@@ -1,0 +1,68 @@
+name: baseline_with_offline
+description: |
+  Two-layer baseline: CatBoost (offline) -> p_offline -> ARF -> p_online ->
+  ThresholdGate(p_online >= tau). Demonstrates the post-conformal-removal
+  two-layer architecture once a frozen .cbm exists.
+
+  Run after baseline.yaml: this spec assumes a CatBoost model has been trained
+  out-of-band (e.g. via notebooks/03_offline_train.ipynb) and persisted at
+  artifacts/offline_model/model.cbm with the expected feature column order in
+  selected_features.json. Without those files this spec will fail at startup —
+  swap to baseline.yaml or train the model first.
+seed: 42
+
+# Accept-gate fields (sibling RIGOR — assumed merged post this commit's wave).
+hypothesis_id: BASELINE-two-layer
+predicted_effect_min: 0.0          # demo spec; the deliverable is the two-layer flow
+min_n_trades: 50
+bootstrap:
+  scheme: stationary_block
+  n_resamples: 5000
+  block_length: auto
+
+wagie:
+  data:
+    parquet_path: data/processed/btcusdt_1m.parquet
+    m_minutes: 20
+  model:
+    catboost_path: artifacts/offline_model/model.cbm
+    selected_features_path: artifacts/offline_model/selected_features.json
+    catboost_ensemble_n: 1            # bump to 3+ for seed-averaged offline
+    arf:
+      n_models: 10
+      lambda_value: 6.0
+      seed: 42
+  strategy:
+    # Sibling TRADING — assumed merged post this commit's wave.
+    kind: threshold_gate
+    layer: p_online                   # gate on the calibrated online output
+    tau: 0.30                         # placeholder; choose on validation Sharpe
+  broker:
+    inventory_cap: 5
+    take_profit_log: 0.0041113
+    stop_loss_log: 0.0041113
+    cost_bps: 1.0
+    execution_latency_minutes: 1
+    expiry_minutes: 20
+  runtime:
+    warmup_samples: 96
+
+features:
+  catalog: default
+  n_features: null
+  regime_feature: parkinson_var_rolling_mean_24
+  regime_edges: [1.0e-6, 1.0e-5]
+  regime_labels: [low, med, high]
+
+charts:
+  enable: true
+  n_calibration_bins: 10
+
+report:
+  enable: true
+  title: "baseline + offline — two-layer ThresholdGate(p_online)"
+
+artifacts:
+  out_dir: artifacts/runs
+  save_state: true
+  save_predictions: true
