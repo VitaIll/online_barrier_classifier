@@ -258,6 +258,10 @@ def test_to_dict_contains_all_top_level_keys() -> None:
         "roc_auc", "pr_auc",
         "n_decisions", "n_filled", "n_actions_approved", "n_actions_rejected",
         "pipeline_state_hash",
+        # CI / pre-registration block (round-040 additive port).
+        "sharpe_ci", "brier_ci", "ece_ci", "roc_ci_delong", "pr_ci",
+        "n_trials", "dsr", "pbo",
+        "accepted", "blocked_reasons",
     }
     assert set(d.keys()) == expected_keys
 

@@ -3,13 +3,19 @@
 This is the SINGLE source of truth for trading metrics in `wagie`. Sharpe is
 annualized at the M-minute bar cadence; PSR follows Bailey & López de Prado
 (2012); CDaR is the 5%-tail conditional drawdown.
+
+Optional CI computation (added round-040): pass ``compute_ci=True`` to
+``compute_trading_metrics`` to additionally populate stationary-block bootstrap
+CIs for Sharpe / Sortino / max-DD on the per-trade PnL series. CIs are scaled
+to the same units as the point estimates (Sharpe annualized; max-DD in log
+space).
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Sequence
+from dataclasses import dataclass, field
+from typing import Optional, Sequence
 
 import numpy as np
 from scipy import stats as scipy_stats
@@ -34,6 +40,15 @@ class TradingMetrics:
     sortino: float
     max_drawdown_log: float
     cdar_5pct_log: float
+    # CI fields (optional, populated when ``compute_ci=True``).
+    sharpe_ci_lo: Optional[float] = None
+    sharpe_ci_hi: Optional[float] = None
+    sortino_ci_lo: Optional[float] = None
+    sortino_ci_hi: Optional[float] = None
+    max_dd_ci_lo: Optional[float] = None
+    max_dd_ci_hi: Optional[float] = None
+    block_length: Optional[int] = None
+    n_bootstrap: Optional[int] = None
 
     def to_dict(self) -> dict:
         return {
@@ -46,12 +61,27 @@ class TradingMetrics:
             "sharpe": self.sharpe, "probabilistic_sharpe": self.probabilistic_sharpe,
             "sortino": self.sortino, "max_drawdown_log": self.max_drawdown_log,
             "cdar_5pct_log": self.cdar_5pct_log,
+            # CI block — None when not requested.
+            "sharpe_ci_lo": self.sharpe_ci_lo,
+            "sharpe_ci_hi": self.sharpe_ci_hi,
+            "sortino_ci_lo": self.sortino_ci_lo,
+            "sortino_ci_hi": self.sortino_ci_hi,
+            "max_dd_ci_lo": self.max_dd_ci_lo,
+            "max_dd_ci_hi": self.max_dd_ci_hi,
+            "block_length": self.block_length,
+            "n_bootstrap": self.n_bootstrap,
         }
 
 
 def compute_trading_metrics(
     fills: Sequence[Fill], *, m_minutes: int = 20,
+    compute_ci: bool = False, n_bootstrap: int = 2000,
+    confidence: float = 0.95, ci_seed: int = 42,
 ) -> TradingMetrics:
+    """Trading metrics from fills. Set ``compute_ci=True`` to populate
+    bootstrap CIs for Sharpe/Sortino/max-DD via stationary block bootstrap
+    on the per-trade PnL series (Politis-Romano 1994 + Politis-White 2004).
+    """
     n = len(fills)
     if n == 0:
         return TradingMetrics(
@@ -108,6 +138,47 @@ def compute_trading_metrics(
     total_log = float(eq[-1]) if len(eq) else 0.0
     total_pct = float(math.exp(total_log) - 1.0)
 
+    # Optional CI block: stationary block bootstrap on per-trade PnL.
+    sharpe_ci_lo = sharpe_ci_hi = None
+    sortino_ci_lo = sortino_ci_hi = None
+    max_dd_ci_lo = max_dd_ci_hi = None
+    block_length = None
+    if compute_ci and n >= 2:
+        from .bootstrap import (
+            bootstrap_max_drawdown,
+            bootstrap_sharpe,
+            bootstrap_sortino,
+            optimal_block_length,
+        )
+        try:
+            bl = optimal_block_length(pnl)
+        except ValueError:
+            bl = max(1, int(round(n ** (1.0 / 3.0))))
+        ann_factor = math.sqrt(trades_per_year)
+        try:
+            sh = bootstrap_sharpe(
+                pnl, n_resamples=n_bootstrap, block_length=bl,
+                confidence=confidence, seed=ci_seed,
+            )
+            sharpe_ci_lo = float(sh["ci_lo"]) * ann_factor
+            sharpe_ci_hi = float(sh["ci_hi"]) * ann_factor
+            so = bootstrap_sortino(
+                pnl, n_resamples=n_bootstrap, block_length=bl,
+                confidence=confidence, seed=ci_seed,
+            )
+            sortino_ci_lo = float(so["ci_lo"]) * ann_factor
+            sortino_ci_hi = float(so["ci_hi"]) * ann_factor
+            md = bootstrap_max_drawdown(
+                pnl, n_resamples=n_bootstrap, block_length=bl,
+                confidence=confidence, seed=ci_seed,
+            )
+            max_dd_ci_lo = float(md["ci_lo"])
+            max_dd_ci_hi = float(md["ci_hi"])
+            block_length = int(bl)
+        except (ValueError, RuntimeError):
+            # Bootstrap failed (e.g. degenerate inputs) — leave CIs None.
+            pass
+
     return TradingMetrics(
         n_trades=int(n),
         n_tp=int(sum(1 for f in fills if str(f.reason) == "tp")),
@@ -119,6 +190,11 @@ def compute_trading_metrics(
         sharpe=float(sharpe), probabilistic_sharpe=float(psr),
         sortino=float(sortino),
         max_drawdown_log=max_dd, cdar_5pct_log=cdar_5,
+        sharpe_ci_lo=sharpe_ci_lo, sharpe_ci_hi=sharpe_ci_hi,
+        sortino_ci_lo=sortino_ci_lo, sortino_ci_hi=sortino_ci_hi,
+        max_dd_ci_lo=max_dd_ci_lo, max_dd_ci_hi=max_dd_ci_hi,
+        block_length=block_length,
+        n_bootstrap=int(n_bootstrap) if compute_ci else None,
     )
 
 

@@ -141,3 +141,59 @@ def test_backtest_mode_emits_nonzero_brier_and_ece(synthetic_minute_parquet, tmp
     assert metrics["brier"] > 0.0, \
         f"Brier should be > 0 on synthetic fixture; got {metrics['brier']}"
     assert metrics["ece"] >= 0.0
+
+
+# ----------------------------- Accept-gate ---------------------------------
+
+def test_min_n_trades_gate_blocks_report_writes_blocked_md(
+    synthetic_minute_parquet, tmp_path,
+):
+    """DoD round-040 #3: a spec with `min_n_trades=10000` (much higher than
+    the synthetic harness will ever produce) must write `BLOCKED.md` instead
+    of `report.md` and return `accepted=False`."""
+    raw = _base_spec_dict(synthetic_minute_parquet, tmp_path / "runs",
+                          name="blocked")
+    raw["hypothesis_id"] = "H-040-test"
+    raw["min_n_trades"] = 10_000          # cannot be hit on synthetic 20k bars
+    raw["predicted_effect_min"] = 5.0     # also unattainable
+    spec = ExperimentSpec.model_validate(raw)
+
+    result = ExperimentProtocol().run(spec)
+
+    # Refused to publish a report.
+    assert result.report_path is None
+    assert not (result.out_dir / "report.md").exists()
+    # Wrote BLOCKED.md with the failure reasons.
+    blocked = result.out_dir / "BLOCKED.md"
+    assert blocked.is_file(), \
+        f"BLOCKED.md not written; out_dir contents: {list(result.out_dir.iterdir())}"
+    body = blocked.read_text()
+    assert "BLOCKED" in body
+    assert "min_n_trades" in body
+    # ExperimentResult carries the reasons.
+    assert result.accepted is False
+    assert any("min_n_trades" in r for r in result.blocked_reasons)
+    assert result.blocked_path == blocked
+
+    # metrics.json was rewritten with accepted=False.
+    metrics = json.loads((result.out_dir / "metrics.json").read_text())
+    assert metrics["accepted"] is False
+    assert any("min_n_trades" in r for r in metrics["blocked_reasons"])
+
+
+def test_default_spec_passes_gate_writes_report_md(
+    synthetic_minute_parquet, tmp_path,
+):
+    """A spec with the default permissive gates (min_n_trades=0,
+    predicted_effect_min=None) must NOT block — report.md is written."""
+    raw = _base_spec_dict(synthetic_minute_parquet, tmp_path / "runs",
+                          name="permissive")
+    spec = ExperimentSpec.model_validate(raw)
+    result = ExperimentProtocol().run(spec)
+
+    assert result.accepted is True
+    assert result.blocked_reasons == []
+    assert result.blocked_path is None
+    assert result.report_path is not None
+    assert result.report_path.is_file()
+    assert not (result.out_dir / "BLOCKED.md").exists()
